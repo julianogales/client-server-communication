@@ -2,6 +2,7 @@
 
 import socket
 import struct
+import time
 
 # -------------------------------------------------- GLOBAL VARIABLES --------------------------------------------------
 
@@ -30,7 +31,7 @@ client_states_dictionary = {
 }
 
 # Client initial state
-client_state = client_states_dictionary.get(0xa1)  # 0xa1 = NOT_SUBSCRIBED
+client_state = 'NOT_SUBSCRIBED'  # 0xa1 = NOT_SUBSCRIBED
 
 
 # Define UDP Packet structure
@@ -43,6 +44,14 @@ class UDPPacket:
 
 
 packet = UDPPacket()
+
+# Timers
+t = 1
+u = 2
+n = 7
+o = 3
+p = 3
+q = 3
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -61,6 +70,7 @@ def read_config():
 
 
 def subscription():
+    global client_state
     # Init UDPPacket:
     packet.type = 0x00  # 0x00 = SUBS_REQ
     packet.MAC = config_data.get('MAC')
@@ -76,10 +86,18 @@ def subscription():
 
     sock.sendto(pack, (host, port))
 
+    # Change client state after sending packet
+    client_state = 'WAIT_ACK_SUBS'  # 0xa2 = WAIT_ACK_SUBS
+
+
+def wait_server_response():
+    if client_state == 'WAIT_ACK_SUBS':
+        countdown = t
+
 
 def print_process():
-    print("-------------- IDENTIFY CLIENT TO THE SERVER: --------------\n")
-    print(f"Initial client state: {client_state}\n")
+    print("\n-------------- IDENTIFY CLIENT TO THE SERVER: --------------\n")
+
     print(f"SUBSCRIPTION REQUEST:\n"
           f"- Packet Type: {packet.type} == '{packet_dictionary.get(packet.type)}'\n"
           f"- MAC Adress: {packet.MAC}\n"
@@ -88,6 +106,8 @@ def print_process():
     print(f"SENT PACKET:\n"
           f"- Host: {config_data.get('Server')} == {socket.gethostbyname(config_data.get('Server'))}\n"
           f"- Port: {config_data.get('Srv-UDP')}")
+
+    print(f"\nClient state: {client_state}\n")
 
 
 if __name__ == '__main__':
