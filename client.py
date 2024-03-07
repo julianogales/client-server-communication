@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import socket
+import struct
 
 # -------------------------------------------------- GLOBAL VARIABLES --------------------------------------------------
 
@@ -29,7 +30,8 @@ client_states_dictionary = {
 }
 
 # Client initial state
-client_state = client_states_dictionary.get(0xa1)  # client_state = NOT_SUBSCRIBED
+client_state = client_states_dictionary.get(0xa1)  # 0xa1 = NOT_SUBSCRIBED
+
 
 # Define UDP Packet structure
 class UDPPacket:
@@ -39,7 +41,9 @@ class UDPPacket:
         self.random = None  # random (9 bytes) == char
         self.data = None  # data (80 bytes) == char
 
+
 packet = UDPPacket()
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -57,9 +61,36 @@ def read_config():
 
 
 def subscription():
-    packet.type = 
+    # Init UDPPacket:
+    packet.type = 0x00  # 0x00 = SUBS_REQ
+    packet.MAC = config_data.get('MAC')
+    packet.random = "00000000"
+    packet.data = f"{config_data.get('Name')},{config_data.get('Situation')}"
+
+    # UDPPacket to byte-like object -> 'B13s9s80s' defines packet format (B=1byte,13s=13char,9s=9char,80s=80char)
+    pack = struct.pack('B13s9s80s', packet.type, packet.MAC.encode(), packet.random.encode(), packet.data.encode())
+
+    # Send packet SUBS_REQ to server
+    host = socket.gethostbyname(config_data.get('Server'))
+    port = int(config_data.get('Srv-UDP'))
+
+    sock.sendto(pack, (host, port))
+
+
+def print_process():
+    print("-------------- IDENTIFY CLIENT TO THE SERVER: --------------\n")
+    print(f"Initial client state: {client_state}\n")
+    print(f"SUBSCRIPTION REQUEST:\n"
+          f"- Packet Type: {packet.type} == '{packet_dictionary.get(packet.type)}'\n"
+          f"- MAC Adress: {packet.MAC}\n"
+          f"- Random Number: {packet.random}\n"
+          f"- Data: {packet.data}\n")
+    print(f"SENT PACKET:\n"
+          f"- Host: {config_data.get('Server')} == {socket.gethostbyname(config_data.get('Server'))}\n"
+          f"- Port: {config_data.get('Srv-UDP')}")
 
 
 if __name__ == '__main__':
     read_config()
-    print(client_state)
+    subscription()
+    print_process()
