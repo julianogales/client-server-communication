@@ -2,6 +2,7 @@
 
 import socket
 import struct
+import time
 
 # -------------------------------------------------- GLOBAL VARIABLES --------------------------------------------------
 
@@ -12,7 +13,7 @@ config_data = {}
 # Dictionaries
 packet_dictionary = {
     0x00: 'SUBS_REQ',  # Subscription Request
-    0X01: 'SUBS_ACK',  # Subscription Acknowledgement
+    0x01: 'SUBS_ACK',  # Subscription Acknowledgement
     0x02: 'SUBS_REJ',  # Subscription Rejection
     0x03: 'SUBS_INFO',  # Subscription Information
     0x04: 'INFO_ACK',  # Information Acknowledgement
@@ -43,6 +44,7 @@ class UDPPacket:
 
 
 packet = UDPPacket()
+rcv_packet = UDPPacket()
 
 # Timers
 t = 1
@@ -53,8 +55,6 @@ p = 3
 q = 3
 
 # Send packet to server info
-host = socket.gethostbyname(config_data.get('Server'))
-port = int(config_data.get('Srv-UDP'))
 buffer_size = 1 + 13 + 9 + 80
 
 
@@ -84,34 +84,81 @@ def send_subscription():
     # UDPPacket to byte-like object -> 'B13s9s80s' defines packet format (B=1byte,13s=13char,9s=9char,80s=80char)
     pack = struct.pack('B13s9s80s', packet.type, packet.MAC.encode(), packet.random.encode(), packet.data.encode())
 
+    host = socket.gethostbyname(config_data.get('Server'))
+    port = int(config_data.get('Srv-UDP'))
     sock.sendto(pack, (host, port))
 
     # Change client state after sending packet
     client_state = 'WAIT_ACK_SUBS'  # 0xa2 = WAIT_ACK_SUBS
 
 
-def subscription():
-    n_packet = 0
-    n_subs_proc = 0
-    while client_state == 'WAIT_ACK_SUBS' or n_subs_proc <= o:
-        time = 0
-        while client_state == 'WAIT_ACK_SUBS' or n_packet <= n:
-            if n_packet < p:
-                time = t
-            elif n_packet >= p and time < q*t:
-                time += t
-            if n_packet == n:
-                time = u
+def read_packet():
+    (rcv_pack, (rcv_host, rcv_port)) = sock.recvfrom(buffer_size)
+    rcv_packet.type, rcv_packet.MAC, rcv_packet.random, rcv_packet.data = struct.unpack('B13s9s80s', rcv_pack)
 
-            sock.settimeout(time)
+    # Obtain the real data by converting or removing extra bytes
+    rcv_packet.MAC = rcv_packet.MAC.decode().strip(b'\x00'.decode())
+    rcv_packet.random = rcv_packet.random.decode().strip(b'\x00'.decode())
+    rcv_packet.data = rcv_packet.data.split(b'\x00')[0].decode()
+
+    return rcv_packet.type == 0x01 and client_state == 'WAIT_ACK_SUBS'  # 0x01 = SUBS_ACK ; 0xa2 = WAIT_ACK_SUBS
+
+
+def send_info():
+    global client_state
+    tcp_port = config_data.get('Local-TCP')
+    devices = config_data.get('Elements')
+    data = f"{devices},{tcp_port}"
+
+    pack = struct.pack('B13s9s80s', 0x03, packet.MAC.encode(), rcv_packet.random.encode(), data.encode())
+
+    host = socket.gethostbyname(config_data.get('Server'))
+    port = int(rcv_packet.data)
+    sock.sendto(pack, (host, port))
+
+    # Change client state after sending packet
+    client_state = 'WAIT_ACK_INFO'  # 0xa3 = WAIT_ACK_INFO
+
+
+def subscription():
+    n_subs_proc = 1
+    received_packet = False
+    while not received_packet and n_subs_proc <= o:
+        print(f"Subscription process {n_subs_proc}:")
+        timeout = 0
+        n_packet = 0
+        while not received_packet and n_packet < n:
+            if n_packet < p:
+                timeout = t
+            elif n_packet >= p and timeout < q * t:
+                timeout += t
+
+            send_subscription()
+            n_packet += 1
+            print(f"Packet {n_packet} sent.")
+
+            sock.settimeout(timeout)
             try:
-                send_subscription()
-                sock.recvfrom(buffer_size)
+                if read_packet():
+                    print("Server response received!")
+                    received_packet = True
 
             except socket.timeout:
-                n_packet += 1
+                print(f"Timeout({timeout}s)")
 
         n_subs_proc += 1
+        if n_packet == n and n_subs_proc <= o:
+            print(f"Unable to complete subscription process {n_subs_proc - 1}.")
+            print(f"\nWaiting {u} seconds to restart the subscription process...\n")
+            time.sleep(u)
+
+    if received_packet:
+        send_info()
+        print("[SUBS_INFO] packet sent to server.")
+
+    else:
+        print(f"Unable to complete subscription process {n_subs_proc - 1}.")
+        print("\nSubscription process was cancelled. Server could not be reached.")
 
 
 def print_process():
@@ -119,7 +166,7 @@ def print_process():
 
     print(f"SUBSCRIPTION REQUEST:\n"
           f"- Packet Type: {packet.type} == '{packet_dictionary.get(packet.type)}'\n"
-          f"- MAC Adress: {packet.MAC}\n"
+          f"- MAC Address: {packet.MAC}\n"
           f"- Random Number: {packet.random}\n"
           f"- Data: {packet.data}\n")
     print(f"SENT PACKET:\n"
