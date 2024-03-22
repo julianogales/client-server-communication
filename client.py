@@ -2,7 +2,6 @@
 
 import socket
 import struct
-import time
 
 # -------------------------------------------------- GLOBAL VARIABLES --------------------------------------------------
 
@@ -53,6 +52,11 @@ o = 3
 p = 3
 q = 3
 
+# Send packet to server info
+host = socket.gethostbyname(config_data.get('Server'))
+port = int(config_data.get('Srv-UDP'))
+buffer_size = 1 + 13 + 9 + 80
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -69,8 +73,8 @@ def read_config():
         file.close()
 
 
-def subscription():
-    global client_state
+def send_subscription():
+    global client_state  # 0xa1 = NOT_SUBSCRIBED
     # Init UDPPacket:
     packet.type = 0x00  # 0x00 = SUBS_REQ
     packet.MAC = config_data.get('MAC')
@@ -80,19 +84,34 @@ def subscription():
     # UDPPacket to byte-like object -> 'B13s9s80s' defines packet format (B=1byte,13s=13char,9s=9char,80s=80char)
     pack = struct.pack('B13s9s80s', packet.type, packet.MAC.encode(), packet.random.encode(), packet.data.encode())
 
-    # Send packet SUBS_REQ to server
-    host = socket.gethostbyname(config_data.get('Server'))
-    port = int(config_data.get('Srv-UDP'))
-
     sock.sendto(pack, (host, port))
 
     # Change client state after sending packet
     client_state = 'WAIT_ACK_SUBS'  # 0xa2 = WAIT_ACK_SUBS
 
 
-def wait_server_response():
-    if client_state == 'WAIT_ACK_SUBS':
-        countdown = t
+def subscription():
+    n_packet = 0
+    n_subs_proc = 0
+    while client_state == 'WAIT_ACK_SUBS' or n_subs_proc <= o:
+        time = 0
+        while client_state == 'WAIT_ACK_SUBS' or n_packet <= n:
+            if n_packet < p:
+                time = t
+            elif n_packet >= p and time < q*t:
+                time += t
+            if n_packet == n:
+                time = u
+
+            sock.settimeout(time)
+            try:
+                send_subscription()
+                sock.recvfrom(buffer_size)
+
+            except socket.timeout:
+                n_packet += 1
+
+        n_subs_proc += 1
 
 
 def print_process():
