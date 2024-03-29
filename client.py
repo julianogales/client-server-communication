@@ -161,22 +161,7 @@ def subscription():
         print("\nSubscription process was cancelled. Server could not be reached.")
 
 
-def print_process():
-    print("\n-------------- IDENTIFY CLIENT TO THE SERVER: --------------\n")
-
-    print(f"SUBSCRIPTION REQUEST:\n"
-          f"- Packet Type: {packet.type} == '{packet_dictionary.get(packet.type)}'\n"
-          f"- MAC Address: {packet.MAC}\n"
-          f"- Random Number: {packet.random}\n"
-          f"- Data: {packet.data}\n")
-    print(f"SENT PACKET:\n"
-          f"- Host: {config_data.get('Server')} == {socket.gethostbyname(config_data.get('Server'))}\n"
-          f"- Port: {config_data.get('Srv-UDP')}")
-
-    print(f"\nClient state: {client_state}\n")
-
-
 if __name__ == '__main__':
     read_config()
     subscription()
-    print_process()
+    print(f"\nClient state: {client_state}\n")
