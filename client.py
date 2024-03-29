@@ -111,7 +111,7 @@ def read_packet():
     elif rcv_packet.type == 0x04 and client_state == 'WAIT_ACK_INFO':  # 0x04 = INFO_ACK
         return 'INFO_ACK'
     else:
-        return 'error'
+        return 'Incorrect'
 
 
 def send_info():
@@ -126,18 +126,16 @@ def send_info():
     port = int(rcv_packet.data)
     sock.sendto(pack, (host, port))
 
-    # Change client state after sending packet
-    client_state = 'WAIT_ACK_INFO'  # 0xa3 = WAIT_ACK_INFO
-
 
 def subscription():
+    global client_state
     n_subs_proc = 1
-    received_packet = False
-    while not received_packet and n_subs_proc <= o:
+    packet_type = 'none'
+    while packet_type == 'none' and n_subs_proc <= o:
         print(f"Subscription process {n_subs_proc}:")
         timeout = 0
         n_packet = 0
-        while not received_packet and n_packet < n:
+        while packet_type == 'none' and n_packet < n:
             if n_packet < p:
                 timeout = t
             elif n_packet >= p and timeout < q * t:
@@ -149,9 +147,9 @@ def subscription():
 
             sock.settimeout(timeout)
             try:
-                if read_packet() == 'SUBS_ACK':
+                packet_type = read_packet()
+                if packet_type != 'none':
                     print("Server response received!")
-                    received_packet = True
 
             except socket.timeout:
                 print(f"Timeout({timeout}s)")
@@ -162,10 +160,33 @@ def subscription():
             print(f"\nWaiting {u} seconds to restart the subscription process...\n")
             time.sleep(u)
 
-    if received_packet:
-        send_info()
-        print("[SUBS_INFO] packet sent to server.")
+    # Packet received
+    if packet_type != 'none':
+        print(f"[{packet_type}] packet received from server.")
+        if packet_type == 'SUBS_ACK':
+            send_info()
+            print("[SUBS_INFO] packet sent to server.")
+            client_state = 'WAIT_ACK_INFO'  # 0xa3 = WAIT_ACK_INFO
 
+        elif packet_type == 'SUBS_NACK':
+            client_state = 'NOT_SUBSCRIBED'  # 0xa1 = NOT_SUBSCRIBED
+
+        elif packet_type == 'SUBS_REJ':
+            client_state = 'NOT_SUBSCRIBED'
+            subscription()
+
+        elif packet_type == 'INFO_ACK':
+            # -------- TO-DO: --------
+            #   check_server_id()
+            #   next phase -> ¿?
+            client_state = 'SUBSCRIBED'
+
+        else:  # packet_type == 'Incorrect'
+            client_state = 'NOT_SUBSCRIBED'
+
+        print(f"Update client state to [{client_state}]")
+
+    # Packet not received
     else:
         print(f"Unable to complete subscription process {n_subs_proc - 1}.")
         print("\nSubscription process was cancelled. Server could not be reached.")
@@ -174,4 +195,3 @@ def subscription():
 if __name__ == '__main__':
     read_config()
     subscription()
-    print(f"\nClient state: {client_state}\n")
