@@ -108,7 +108,7 @@ def send_info():
     global client_state
     tcp_port = config_data.get('Local-TCP')
     devices = config_data.get('Elements')
-    data = f"{devices},{tcp_port}"
+    data = f"{tcp_port},{devices}"
 
     pack = struct.pack('B13s9s80s', 0x03, packet.MAC.encode(), rcv_packet.random.encode(), data.encode())
 
