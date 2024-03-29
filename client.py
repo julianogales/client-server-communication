@@ -101,7 +101,17 @@ def read_packet():
     rcv_packet.random = rcv_packet.random.decode().strip(b'\x00'.decode())
     rcv_packet.data = rcv_packet.data.split(b'\x00')[0].decode()
 
-    return rcv_packet.type == 0x01 and client_state == 'WAIT_ACK_SUBS'  # 0x01 = SUBS_ACK ; 0xa2 = WAIT_ACK_SUBS
+    # Classify packets
+    if rcv_packet.type == 0x01 and client_state == 'WAIT_ACK_SUBS':  # 0x01 = SUBS_ACK ; 0xa2 = WAIT_ACK_SUBS
+        return 'SUBS_ACK'
+    elif rcv_packet.type == 0x05:  # 0x05 = SUBS_NACK
+        return 'SUBS_NACK'
+    elif rcv_packet.type == 0x02:  # 0x02 = SUBS_REJ
+        return 'SUBS_REJ'
+    elif rcv_packet.type == 0x04 and client_state == 'WAIT_ACK_INFO':  # 0x04 = INFO_ACK
+        return 'INFO_ACK'
+    else:
+        return 'error'
 
 
 def send_info():
@@ -139,7 +149,7 @@ def subscription():
 
             sock.settimeout(timeout)
             try:
-                if read_packet():
+                if read_packet() == 'SUBS_ACK':
                     print("Server response received!")
                     received_packet = True
 
