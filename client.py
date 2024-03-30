@@ -45,6 +45,10 @@ class UDPPacket:
 
 packet = UDPPacket()
 rcv_packet = UDPPacket()
+host_1 = None
+mac_1 = None
+host_2 = None
+mac_2 = None
 
 # Timers
 t = 1
@@ -92,7 +96,9 @@ def send_subscription():
     client_state = 'WAIT_ACK_SUBS'  # 0xa2 = WAIT_ACK_SUBS
 
 
-def read_packet():
+def read_packet(data_action):
+    global host_1, mac_1, host_2, mac_2
+
     (rcv_pack, (rcv_host, rcv_port)) = sock.recvfrom(buffer_size)
     rcv_packet.type, rcv_packet.MAC, rcv_packet.random, rcv_packet.data = struct.unpack('B13s9s80s', rcv_pack)
 
@@ -100,6 +106,13 @@ def read_packet():
     rcv_packet.MAC = rcv_packet.MAC.decode().strip(b'\x00'.decode())
     rcv_packet.random = rcv_packet.random.decode().strip(b'\x00'.decode())
     rcv_packet.data = rcv_packet.data.split(b'\x00')[0].decode()
+
+    if data_action == 'store':
+        host_1 = rcv_host
+        mac_1 = rcv_packet.MAC
+    else:
+        host_2 = rcv_host
+        mac_2 = rcv_packet.MAC
 
     # Classify packets
     if rcv_packet.type == 0x01 and client_state == 'WAIT_ACK_SUBS':  # 0x01 = SUBS_ACK ; 0xa2 = WAIT_ACK_SUBS
@@ -112,6 +125,38 @@ def read_packet():
         return 'INFO_ACK'
     else:
         return 'Incorrect'
+
+
+def classify_packet(packet_type):
+    global client_state
+    print(f"[{packet_type}] packet received from server.")
+
+    if packet_type == 'SUBS_ACK':
+        subscription('SUBS_INFO')
+
+    elif packet_type == 'SUBS_NACK':
+        client_state = 'NOT_SUBSCRIBED'  # 0xa1 = NOT_SUBSCRIBED
+        print(f"Update client state to [{client_state}]")
+
+    elif packet_type == 'SUBS_REJ':
+        client_state = 'NOT_SUBSCRIBED'
+        print(f"Update client state to [{client_state}]")
+        subscription('SUBS_REQ')
+
+    elif packet_type == 'INFO_ACK':
+        if verify_server_id():
+            client_state = 'SUBSCRIBED'
+            print(f"Update client state to [{client_state}]")
+            print("Subscription phase successfully completed!")
+        else:
+            client_state = 'NOT_SUBSCRIBED'
+            print(f"Update client state to [{client_state}]")
+            subscription('SUBS_REQ')
+
+    else:  # packet_type == 'Incorrect'
+        client_state = 'NOT_SUBSCRIBED'
+        print(f"Update client state to [{client_state}]")
+        subscription('SUBS_REQ')
 
 
 def send_info():
@@ -127,28 +172,43 @@ def send_info():
     sock.sendto(pack, (host, port))
 
 
-def subscription():
+def verify_server_id():
+    return host_1 == host_2 and mac_1 == mac_2
+
+
+def subscription(sent_packet):
     global client_state
     n_subs_proc = 1
-    packet_type = 'none'
-    while packet_type == 'none' and n_subs_proc <= o:
-        print(f"Subscription process {n_subs_proc}:")
+    packet_type = None
+    while packet_type is None and n_subs_proc <= o:
+        if sent_packet == 'SUBS_REQ':
+            print(f"Subscription process {n_subs_proc}:")
         timeout = 0
         n_packet = 0
-        while packet_type == 'none' and n_packet < n:
+        while packet_type is None and n_packet < n:
             if n_packet < p:
                 timeout = t
             elif n_packet >= p and timeout < q * t:
                 timeout += t
 
-            send_subscription()
-            n_packet += 1
-            print(f"Packet {n_packet} sent.")
+            if sent_packet == 'SUBS_REQ':
+                send_subscription()
+                n_packet += 1
+                print(f"[SUBS_REQ] packet {n_packet} sent to server.")
+            elif sent_packet == 'SUBS_INFO':
+                send_info()
+                n_packet += 1
+                print(f"[SUBS_INFO] packet {n_packet} sent to server.")
+                client_state = 'WAIT_ACK_INFO'  # 0xa3 = WAIT_ACK_INFO
+                print(f"Update client state to [{client_state}]")
 
             sock.settimeout(timeout)
             try:
-                packet_type = read_packet()
-                if packet_type != 'none':
+                if sent_packet == 'SUBS_REQ':
+                    packet_type = read_packet('store')
+                elif sent_packet == 'SUBS_INFO':
+                    packet_type = read_packet('compare')
+                if packet_type is not None:
                     print("Server response received!")
 
             except socket.timeout:
@@ -161,30 +221,8 @@ def subscription():
             time.sleep(u)
 
     # Packet received
-    if packet_type != 'none':
-        print(f"[{packet_type}] packet received from server.")
-        if packet_type == 'SUBS_ACK':
-            send_info()
-            print("[SUBS_INFO] packet sent to server.")
-            client_state = 'WAIT_ACK_INFO'  # 0xa3 = WAIT_ACK_INFO
-
-        elif packet_type == 'SUBS_NACK':
-            client_state = 'NOT_SUBSCRIBED'  # 0xa1 = NOT_SUBSCRIBED
-
-        elif packet_type == 'SUBS_REJ':
-            client_state = 'NOT_SUBSCRIBED'
-            subscription()
-
-        elif packet_type == 'INFO_ACK':
-            # -------- TO-DO: --------
-            #   check_server_id()
-            #   next phase -> ¿?
-            client_state = 'SUBSCRIBED'
-
-        else:  # packet_type == 'Incorrect'
-            client_state = 'NOT_SUBSCRIBED'
-
-        print(f"Update client state to [{client_state}]")
+    if packet_type is not None:
+        classify_packet(packet_type)
 
     # Packet not received
     else:
@@ -194,4 +232,4 @@ def subscription():
 
 if __name__ == '__main__':
     read_config()
-    subscription()
+    subscription('SUBS_REQ')
