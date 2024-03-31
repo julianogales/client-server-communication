@@ -47,8 +47,11 @@ class UDPPacket:
 
 packet = UDPPacket()
 rcv_packet = UDPPacket()
-host_1 = None
-mac_1 = None
+
+# Packet data
+host_server = None
+mac_server = None
+random_server = None
 host_2 = None
 mac_2 = None
 
@@ -65,6 +68,8 @@ r = 2
 # Send packet to server info
 buffer_size = 1 + 13 + 9 + 80
 
+# Threads
+terminate_thread = False
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -101,7 +106,7 @@ def send_subscription():
 
 
 def read_packet(data_action):
-    global host_1, mac_1, host_2, mac_2
+    global host_server, mac_server, random_server, host_2, mac_2
 
     (rcv_pack, (rcv_host, rcv_port)) = sock.recvfrom(buffer_size)
     rcv_packet.type, rcv_packet.MAC, rcv_packet.random, rcv_packet.data = struct.unpack('B13s9s80s', rcv_pack)
@@ -112,8 +117,9 @@ def read_packet(data_action):
     rcv_packet.data = rcv_packet.data.split(b'\x00')[0].decode()
 
     if data_action == 'store':
-        host_1 = rcv_host
-        mac_1 = rcv_packet.MAC
+        host_server = rcv_host
+        mac_server = rcv_packet.MAC
+        random_server = rcv_packet.random
     else:
         host_2 = rcv_host
         mac_2 = rcv_packet.MAC
@@ -172,7 +178,7 @@ def send_info():
 
 
 def verify_server_id():
-    return host_1 == host_2 and mac_1 == mac_2
+    return host_server == host_2 and mac_server == mac_2
 
 
 def subscription(sent_packet):
@@ -227,6 +233,24 @@ def subscription(sent_packet):
     else:
         print(f"Unable to complete subscription process {n_subs_proc - 1}.")
         print("\nSubscription process was cancelled. Server could not be reached.")
+
+
+def send_hello(packet_type):
+    hello_pack = struct.pack('B13s9s80s', packet_type, packet.MAC.encode(), random_server.encode(),
+                             packet.data.encode())
+
+    port = int(config_data.get('Srv-UDP'))
+
+    if packet_dictionary.get(packet_type) == 'HELLO_REJ':
+        sock.sendto(hello_pack, (host_server, port))
+
+    n_packet = 0
+    while not terminate_thread:
+        sock.sendto(hello_pack, (host_server, port))
+        n_packet += 1
+        print(f"[HELLO] packet {n_packet} sent to server.")
+        print(f"Waiting {v}s...")
+        time.sleep(v)
 
 
 if __name__ == '__main__':
