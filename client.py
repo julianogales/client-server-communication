@@ -52,8 +52,12 @@ rcv_packet = UDPPacket()
 host_server = None
 mac_server = None
 random_server = None
-host_2 = None
-mac_2 = None
+host_info = None
+mac_info = None
+host_hello = None
+mac_hello = None
+random_hello = None
+data_hello = None
 
 # Timers
 t = 1
@@ -70,6 +74,7 @@ buffer_size = 1 + 13 + 9 + 80
 
 # Threads
 terminate_thread = False
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -106,7 +111,7 @@ def send_subscription():
 
 
 def read_packet(data_action):
-    global host_server, mac_server, random_server, host_2, mac_2
+    global host_server, mac_server, random_server, host_info, mac_info, host_hello, mac_hello, random_hello, data_hello
 
     (rcv_pack, (rcv_host, rcv_port)) = sock.recvfrom(buffer_size)
     rcv_packet.type, rcv_packet.MAC, rcv_packet.random, rcv_packet.data = struct.unpack('B13s9s80s', rcv_pack)
@@ -120,9 +125,14 @@ def read_packet(data_action):
         host_server = rcv_host
         mac_server = rcv_packet.MAC
         random_server = rcv_packet.random
-    else:
-        host_2 = rcv_host
-        mac_2 = rcv_packet.MAC
+    elif data_action == 'info':
+        host_info = rcv_host
+        mac_info = rcv_packet.MAC
+    elif data_action == 'hello':
+        host_hello = rcv_host
+        mac_hello = rcv_packet.MAC
+        random_hello = rcv_packet.random
+        data_hello = rcv_packet.data
 
     # Classify packets
     if rcv_packet.type == 0x01 and client_state == 'WAIT_ACK_SUBS':  # 0x01 = SUBS_ACK ; 0xa2 = WAIT_ACK_SUBS
@@ -133,6 +143,10 @@ def read_packet(data_action):
         return 'SUBS_REJ'
     elif rcv_packet.type == 0x04 and client_state == 'WAIT_ACK_INFO':  # 0x04 = INFO_ACK
         return 'INFO_ACK'
+    elif rcv_packet.type == 0x10 and client_state == 'SUBSCRIBED':  # 0x10 = HELLO
+        return 'FIRST_HELLO'
+    elif rcv_packet.type == 0x10 and client_state == 'SEND_HELLO':  # 0x10 = HELLO
+        return 'HELLO'
     else:
         return 'Incorrect'
 
@@ -158,6 +172,22 @@ def classify_packet(packet_type):
         print(f"Update client state to [{client_state}]")
         print("Subscription phase successfully completed!")
 
+    elif packet_type == 'FIRST_HELLO':
+        if verify_server_hello():
+            client_state = 'SEND_HELLO'
+            print(f"Update client state to [{client_state}]")
+            # open_tcp()
+            print("Executing open_tcp()...")
+        else:
+            send_hello(0x11)  # 0x11 = HELLO_REJ
+            client_state = 'NOT_SUBSCRIBED'
+            print(f"Update client state to [{client_state}]")
+            subscription('SUBS_REQ')
+
+    elif packet_type == 'HELLO':
+        # count_consecutive_hello()
+        print("Counting consecutive hello...")
+
     else:  # packet_type == 'Incorrect'
         client_state = 'NOT_SUBSCRIBED'
         print(f"Update client state to [{client_state}]")
@@ -178,7 +208,12 @@ def send_info():
 
 
 def verify_server_id():
-    return host_server == host_2 and mac_server == mac_2
+    return host_server == host_info and mac_server == mac_info
+
+
+def verify_server_hello():
+    return (host_hello == host_server and mac_hello == mac_server and random_hello == random_server
+            and data_hello == packet.data)
 
 
 def subscription(sent_packet):
@@ -235,13 +270,13 @@ def subscription(sent_packet):
         print("\nSubscription process was cancelled. Server could not be reached.")
 
 
-def send_hello(packet_type):
-    hello_pack = struct.pack('B13s9s80s', packet_type, packet.MAC.encode(), random_server.encode(),
+def send_hello(packet_type_num):
+    hello_pack = struct.pack('B13s9s80s', packet_type_num, packet.MAC.encode(), random_server.encode(),
                              packet.data.encode())
 
     port = int(config_data.get('Srv-UDP'))
 
-    if packet_dictionary.get(packet_type) == 'HELLO_REJ':
+    if packet_dictionary.get(packet_type_num) == 'HELLO_REJ':
         sock.sendto(hello_pack, (host_server, port))
 
     n_packet = 0
@@ -251,6 +286,10 @@ def send_hello(packet_type):
         print(f"[HELLO] packet {n_packet} sent to server.")
         print(f"Waiting {v}s...")
         time.sleep(v)
+
+
+def communication():
+    print("Communication process:")
 
 
 if __name__ == '__main__':
