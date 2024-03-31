@@ -158,6 +158,7 @@ def classify_packet(packet_type):
         client_state = 'SUBSCRIBED'
         print(f"Update client state to [{client_state}]")
         print("Subscription phase successfully completed!")
+        communication()
 
     elif packet_type == 'HELLO' and client_state == 'SUBSCRIBED':  # First HELLO packet
         if verify_server_hello():
@@ -294,7 +295,7 @@ def send_hello(packet_type_num):
 def communication():
     print("Communication process:")
     global terminate_thread
-    send_thread = threading.Thread(target=send_hello, args=('HELLO',))
+    send_thread = threading.Thread(target=send_hello, args=(0x10,))
     send_thread.setDaemon(True)
     send_thread.start()
 
