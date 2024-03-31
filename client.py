@@ -147,15 +147,10 @@ def classify_packet(packet_type):
         print(f"Update client state to [{client_state}]")
         subscription('SUBS_REQ')
 
-    elif packet_type == 'INFO_ACK':
-        if verify_server_id():
-            client_state = 'SUBSCRIBED'
-            print(f"Update client state to [{client_state}]")
-            print("Subscription phase successfully completed!")
-        else:
-            client_state = 'NOT_SUBSCRIBED'
-            print(f"Update client state to [{client_state}]")
-            subscription('SUBS_REQ')
+    elif packet_type == 'INFO_ACK' and verify_server_id():
+        client_state = 'SUBSCRIBED'
+        print(f"Update client state to [{client_state}]")
+        print("Subscription phase successfully completed!")
 
     else:  # packet_type == 'Incorrect'
         client_state = 'NOT_SUBSCRIBED'
