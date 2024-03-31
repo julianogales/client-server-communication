@@ -18,6 +18,8 @@ packet_dictionary = {
     0x03: 'SUBS_INFO',  # Subscription Information
     0x04: 'INFO_ACK',  # Information Acknowledgement
     0x05: 'SUBS_NACK',  # Subscription Negative Acknowledgement
+    0x10: 'HELLO',  # Sending HELLO
+    0x11: 'HELLO_REJ',  # Rejection Packet HELLO
 }
 
 client_states_dictionary = {
@@ -57,6 +59,8 @@ n = 7
 o = 3
 p = 3
 q = 3
+v = 2
+r = 2
 
 # Send packet to server info
 buffer_size = 1 + 13 + 9 + 80
