@@ -134,32 +134,18 @@ def read_packet(data_action):
         random_hello = rcv_packet.random
         data_hello = rcv_packet.data
 
-    # Classify packets
-    if rcv_packet.type == 0x01 and client_state == 'WAIT_ACK_SUBS':  # 0x01 = SUBS_ACK ; 0xa2 = WAIT_ACK_SUBS
-        return 'SUBS_ACK'
-    elif rcv_packet.type == 0x05:  # 0x05 = SUBS_NACK
-        return 'SUBS_NACK'
-    elif rcv_packet.type == 0x02:  # 0x02 = SUBS_REJ
-        return 'SUBS_REJ'
-    elif rcv_packet.type == 0x04 and client_state == 'WAIT_ACK_INFO':  # 0x04 = INFO_ACK
-        return 'INFO_ACK'
-    elif rcv_packet.type == 0x10 and client_state == 'SUBSCRIBED':  # 0x10 = HELLO
-        return 'FIRST_HELLO'
-    elif rcv_packet.type == 0x10 and client_state == 'SEND_HELLO':  # 0x10 = HELLO
-        return 'HELLO'
-    else:
-        return 'Incorrect'
+    return packet_dictionary.get(rcv_packet.type)
 
 
 def classify_packet(packet_type):
     global client_state
     print(f"[{packet_type}] packet received from server.")
 
-    if packet_type == 'SUBS_ACK':
+    if packet_type == 'SUBS_ACK' and client_state == 'WAIT_ACK_SUBS':
         subscription('SUBS_INFO')
 
     elif packet_type == 'SUBS_NACK':
-        client_state = 'NOT_SUBSCRIBED'  # 0xa1 = NOT_SUBSCRIBED
+        client_state = 'NOT_SUBSCRIBED'
         print(f"Update client state to [{client_state}]")
 
     elif packet_type == 'SUBS_REJ':
@@ -167,12 +153,12 @@ def classify_packet(packet_type):
         print(f"Update client state to [{client_state}]")
         subscription('SUBS_REQ')
 
-    elif packet_type == 'INFO_ACK' and verify_server_id():
+    elif packet_type == 'INFO_ACK' and client_state == "WAIT_ACK_INFO" and verify_server_id():
         client_state = 'SUBSCRIBED'
         print(f"Update client state to [{client_state}]")
         print("Subscription phase successfully completed!")
 
-    elif packet_type == 'FIRST_HELLO':
+    elif packet_type == 'HELLO' and client_state == 'SUBSCRIBED':  # First HELLO packet
         if verify_server_hello():
             client_state = 'SEND_HELLO'
             print(f"Update client state to [{client_state}]")
@@ -185,8 +171,21 @@ def classify_packet(packet_type):
             subscription('SUBS_REQ')
 
     elif packet_type == 'HELLO':
-        # count_consecutive_hello()
-        print("Counting consecutive hello...")
+        if client_state == 'SUBSCRIBED' and verify_server_hello():
+            client_state = 'SEND_HELLO'
+            print(f"Update client state to [{client_state}]")
+            # open_tcp()
+            print("Executing open_tcp()...")
+
+        elif client_state == 'SEND_HELLO' and verify_server_hello():
+            # count_consecutive_hello()
+            print("Counting consecutive hello...")
+
+        else:
+            send_hello(0x11)  # 0x11 = HELLO_REJ
+            client_state = 'NOT_SUBSCRIBED'
+            print(f"Update client state to [{client_state}]")
+            subscription('SUBS_REQ')
 
     else:  # packet_type == 'Incorrect'
         client_state = 'NOT_SUBSCRIBED'
@@ -247,7 +246,7 @@ def subscription(sent_packet):
                 if sent_packet == 'SUBS_REQ':
                     packet_type = read_packet('store')
                 elif sent_packet == 'SUBS_INFO':
-                    packet_type = read_packet('compare')
+                    packet_type = read_packet('info')
                 if packet_type is not None:
                     print("Server response received!")
 
