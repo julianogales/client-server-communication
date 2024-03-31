@@ -2,6 +2,7 @@
 
 import socket
 import struct
+import threading
 import time
 
 # -------------------------------------------------- GLOBAL VARIABLES --------------------------------------------------
@@ -287,8 +288,34 @@ def send_hello(packet_type_num):
         time.sleep(v)
 
 
+# def open_tcp()
+
+
 def communication():
     print("Communication process:")
+    global terminate_thread
+    send_thread = threading.Thread(target=send_hello, args=('HELLO',))
+    send_thread.setDaemon(True)
+    send_thread.start()
+
+    communication_failure = False
+    timeout = v * r
+
+    # First HELLO packet
+    while not communication_failure and not client_state == 'NOT_SUBSCRIBED':
+        sock.settimeout(timeout)
+        try:
+            packet_type = read_packet('hello')
+            classify_packet(packet_type)
+
+        except socket.timeout:
+            communication_failure = True
+            print(f"Communication failure. No [HELLO] packet has arrived within {timeout}s")
+
+    if client_state == 'NOT_SUBSCRIBED':
+        print("NOT_SUBSCRIBED")
+        terminate_thread = True
+        send_thread.join()
 
 
 if __name__ == '__main__':
