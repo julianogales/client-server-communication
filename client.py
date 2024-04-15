@@ -7,7 +7,8 @@ import time
 
 # -------------------------------------------------- GLOBAL VARIABLES --------------------------------------------------
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 config_data = {}
 
@@ -105,7 +106,7 @@ def send_subscription():
 
     host = socket.gethostbyname(config_data.get('Server'))
     port = int(config_data.get('Srv-UDP'))
-    sock.sendto(pack, (host, port))
+    sock_udp.sendto(pack, (host, port))
 
     # Change client state after sending packet
     client_state = 'WAIT_ACK_SUBS'  # 0xa2 = WAIT_ACK_SUBS
@@ -114,7 +115,7 @@ def send_subscription():
 def read_packet(data_action):
     global host_server, mac_server, random_server, host_info, mac_info, host_hello, mac_hello, random_hello, data_hello
 
-    (rcv_pack, (rcv_host, rcv_port)) = sock.recvfrom(buffer_size)
+    (rcv_pack, (rcv_host, rcv_port)) = sock_udp.recvfrom(buffer_size)
     rcv_packet.type, rcv_packet.MAC, rcv_packet.random, rcv_packet.data = struct.unpack('B13s9s80s', rcv_pack)
 
     # Obtain the real data by converting or removing extra bytes
@@ -160,26 +161,13 @@ def classify_packet(packet_type):
         print("Subscription phase successfully completed!")
         communication()
 
-    elif packet_type == 'HELLO' and client_state == 'SUBSCRIBED':  # First HELLO packet
-        if verify_server_hello():
-            client_state = 'SEND_HELLO'
-            print(f"Update client state to [{client_state}]")
-            # open_tcp()
-            print("Executing open_tcp()...")
-        else:
-            send_hello(0x11)  # 0x11 = HELLO_REJ
-            client_state = 'NOT_SUBSCRIBED'
-            print(f"Update client state to [{client_state}]")
-            subscription('SUBS_REQ')
-
     elif packet_type == 'HELLO':
-        if client_state == 'SUBSCRIBED' and verify_server_hello():
+        if client_state == 'SUBSCRIBED' and verify_server_hello():  # First HELLO packet
             client_state = 'SEND_HELLO'
             print(f"Update client state to [{client_state}]")
-            # open_tcp()
-            print("Executing open_tcp()...")
+            open_tcp()
 
-        elif client_state == 'SEND_HELLO' and verify_server_hello():
+        elif client_state == 'SEND_HELLO':  # Following HELLOs
             # count_consecutive_hello()
             print("Counting consecutive hello...")
 
@@ -205,7 +193,7 @@ def send_info():
 
     host = socket.gethostbyname(config_data.get('Server'))
     port = int(rcv_packet.data)
-    sock.sendto(pack, (host, port))
+    sock_udp.sendto(pack, (host, port))
 
 
 def verify_server_id():
@@ -243,7 +231,7 @@ def subscription(sent_packet):
                 client_state = 'WAIT_ACK_INFO'  # 0xa3 = WAIT_ACK_INFO
                 print(f"Update client state to [{client_state}]")
 
-            sock.settimeout(timeout)
+            sock_udp.settimeout(timeout)
             try:
                 if sent_packet == 'SUBS_REQ':
                     packet_type = read_packet('store')
@@ -278,33 +266,60 @@ def send_hello(packet_type_num):
     port = int(config_data.get('Srv-UDP'))
 
     if packet_dictionary.get(packet_type_num) == 'HELLO_REJ':
-        sock.sendto(hello_pack, (host_server, port))
+        sock_udp.sendto(hello_pack, (host_server, port))
 
     n_packet = 0
     while not terminate_thread:
-        sock.sendto(hello_pack, (host_server, port))
+        sock_udp.sendto(hello_pack, (host_server, port))
         n_packet += 1
-        print(f"[HELLO] packet {n_packet} sent to server.")
-        print(f"Waiting {v}s...")
+        # print(f"[HELLO] packet {n_packet} sent to server.")
+        # print(f"Waiting {v}s...")
         time.sleep(v)
 
 
-# def open_tcp()
+def system_input():
+    while client_state == 'SEND_HELLO':
+        command = input()
+        parts = command.split()
+
+        if parts[0] == 'stat':
+            print("Showing id date from the controller (MAC, name and situation), all the controller devices and their"
+                  "actual value...")
+        elif parts[0] == 'set' and len(parts) >= 3:
+            device_name = parts[1]
+            value = parts[2]
+            print("Simulating the read of a sensor value or the controller state and changing the value associated to"
+                  "the device <device_name> to <value>...")
+        elif parts[0] == 'send' and len(parts) >= 1:
+            device_name = parts[1]
+            print("Sending the value associated to the device <device_name> to the server...")
+        elif parts[0] == 'quit':
+            print("Terminating client execution. Closing communication ports and terminating all the processes...")
+        else:
+            print("Unknown command. Please enter one of the following commands:"
+                  "\n- stat\n- set <device_name> <value>\n- send <device_name>\n- quit")
+
+
+def open_tcp():
+    sock_tcp.bind((host_server, int(config_data.get('Local-TCP'))))
+    print("Connection TCP client-server has been established.")
+
+    system_thread = threading.Thread(target=system_input)
+    system_thread.start()
 
 
 def communication():
-    print("Communication process:")
+    print("\nCommunication process:")
     global terminate_thread
     send_thread = threading.Thread(target=send_hello, args=(0x10,))
-    send_thread.setDaemon(True)
     send_thread.start()
 
     communication_failure = False
     timeout = v * r
 
     # First HELLO packet
-    while not communication_failure and not client_state == 'NOT_SUBSCRIBED':
-        sock.settimeout(timeout)
+    while not communication_failure and (not client_state == 'NOT_SUBSCRIBED' and not client_state == 'SEND_HELLO'):
+        sock_udp.settimeout(timeout)
         try:
             packet_type = read_packet('hello')
             classify_packet(packet_type)
