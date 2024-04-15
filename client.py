@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import os
+import signal
 import socket
 import struct
 import threading
@@ -70,6 +72,7 @@ p = 3
 q = 3
 v = 2
 r = 2
+s = 3
 
 # Send packet to server info
 buffer_size = 1 + 13 + 9 + 80
@@ -141,37 +144,36 @@ def read_packet(data_action):
 
 def classify_packet(packet_type):
     global client_state
-    print(f"[{packet_type}] packet received from server.")
 
     if packet_type == 'SUBS_ACK' and client_state == 'WAIT_ACK_SUBS':
+        print(f"[{packet_type}] packet received from server.")
         subscription('SUBS_INFO')
 
     elif packet_type == 'SUBS_NACK':
+        print(f"[{packet_type}] packet received from server.")
         client_state = 'NOT_SUBSCRIBED'
         print(f"Update client state to [{client_state}]")
 
     elif packet_type == 'SUBS_REJ':
+        print(f"[{packet_type}] packet received from server.")
         client_state = 'NOT_SUBSCRIBED'
         print(f"Update client state to [{client_state}]")
         subscription('SUBS_REQ')
 
     elif packet_type == 'INFO_ACK' and client_state == "WAIT_ACK_INFO" and verify_server_id():
+        print(f"[{packet_type}] packet received from server.")
         client_state = 'SUBSCRIBED'
         print(f"Update client state to [{client_state}]")
         print("Subscription phase successfully completed!")
         communication()
 
     elif packet_type == 'HELLO':
+        # print(f"[{packet_type}] packet received from server.")
         if client_state == 'SUBSCRIBED' and verify_server_hello():  # First HELLO packet
             client_state = 'SEND_HELLO'
             print(f"Update client state to [{client_state}]")
-            open_tcp()
 
-        elif client_state == 'SEND_HELLO':  # Following HELLOs
-            # count_consecutive_hello()
-            print("Counting consecutive hello...")
-
-        else:
+        if not verify_server_hello() or (not client_state == 'SUBSCRIBED' and not client_state == 'SEND_HELLO'):
             send_hello(0x11)  # 0x11 = HELLO_REJ
             client_state = 'NOT_SUBSCRIBED'
             print(f"Update client state to [{client_state}]")
@@ -211,7 +213,7 @@ def subscription(sent_packet):
     packet_type = None
     while packet_type is None and n_subs_proc <= o:
         if sent_packet == 'SUBS_REQ':
-            print(f"Subscription process {n_subs_proc}:")
+            print(f"\nSubscription process {n_subs_proc}:")
         timeout = 0
         n_packet = 0
         while packet_type is None and n_packet < n:
@@ -278,34 +280,28 @@ def send_hello(packet_type_num):
 
 
 def system_input():
-    while client_state == 'SEND_HELLO':
+    while client_state == 'SEND_HELLO' and not terminate_thread:
         command = input()
-        parts = command.split()
+        parts = command.split(' ')
 
-        if parts[0] == 'stat':
-            print("Showing id date from the controller (MAC, name and situation), all the controller devices and their"
-                  "actual value...")
-        elif parts[0] == 'set' and len(parts) >= 3:
-            device_name = parts[1]
-            value = parts[2]
-            print("Simulating the read of a sensor value or the controller state and changing the value associated to"
-                  "the device <device_name> to <value>...")
-        elif parts[0] == 'send' and len(parts) >= 1:
-            device_name = parts[1]
-            print("Sending the value associated to the device <device_name> to the server...")
-        elif parts[0] == 'quit':
-            print("Terminating client execution. Closing communication ports and terminating all the processes...")
-        else:
-            print("Unknown command. Please enter one of the following commands:"
-                  "\n- stat\n- set <device_name> <value>\n- send <device_name>\n- quit")
-
-
-def open_tcp():
-    sock_tcp.bind((host_server, int(config_data.get('Local-TCP'))))
-    print("Connection TCP client-server has been established.")
-
-    system_thread = threading.Thread(target=system_input)
-    system_thread.start()
+        if client_state == 'SEND_HELLO':
+            if command == 'stat':
+                print("Showing id date from the controller (MAC, name and situation), all the controller devices and "
+                      "their actual value...")
+            elif parts[0] == 'set' and len(parts) >= 3:
+                device_name = parts[1]
+                value = parts[2]
+                print("Simulating the read of a sensor value or the controller state and changing the value associated "
+                      "to the device <device_name> to <value>...")
+            elif parts[0] == 'send' and len(parts) >= 1:
+                device_name = parts[1]
+                print("Sending the value associated to the device <device_name> to the server...")
+            elif command == 'quit':
+                print("Terminating client execution. Closing communication ports and terminating all the processes.")
+                os.kill(os.getppid(), signal.SIGINT)
+            else:
+                print("Unknown command. Please enter one of the following commands:"
+                      "\n- stat\n- set <device_name> <value>\n- send <device_name>\n- quit")
 
 
 def communication():
@@ -314,24 +310,51 @@ def communication():
     send_thread = threading.Thread(target=send_hello, args=(0x10,))
     send_thread.start()
 
-    communication_failure = False
-    timeout = v * r
-
     # First HELLO packet
-    while not communication_failure and (not client_state == 'NOT_SUBSCRIBED' and not client_state == 'SEND_HELLO'):
+    timeout = v * r
+    if client_state == 'SUBSCRIBED':
         sock_udp.settimeout(timeout)
         try:
             packet_type = read_packet('hello')
             classify_packet(packet_type)
-
         except socket.timeout:
-            communication_failure = True
             print(f"Communication failure. No [HELLO] packet has arrived within {timeout}s")
+            terminate_thread = True
+            send_thread.join()
+            classify_packet('NotHello')
 
-    if client_state == 'NOT_SUBSCRIBED':
-        print("NOT_SUBSCRIBED")
-        terminate_thread = True
-        send_thread.join()
+    # Following HELLOs packets
+    if client_state == 'SEND_HELLO':
+        # Open TCP port:
+        sock_tcp.bind((host_server, int(config_data.get('Local-TCP'))))
+        print("Connection TCP client-server has been established.")
+
+        system_thread = threading.Thread(target=system_input)
+        system_thread.start()
+
+        # Receive following HELLOs and count strikes:
+        strike_hello_miss = 0
+        timeout = v
+        strike = True
+        while client_state == 'SEND_HELLO' and strike_hello_miss < s:
+            if not strike:
+                strike_hello_miss = 0
+
+            sock_udp.settimeout(timeout)
+            try:
+                packet_type = read_packet('hello')
+                classify_packet(packet_type)
+                strike = False
+            except socket.timeout:
+                strike_hello_miss += 1
+                strike = True
+
+        sock_tcp.close()
+        if strike_hello_miss == 3:
+            print(f"STRIKE 3. No [HELLO] packets received within {3 * timeout}s")
+            terminate_thread = True
+            send_thread.join()
+            classify_packet('NotHello')
 
 
 if __name__ == '__main__':
