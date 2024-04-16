@@ -4,6 +4,7 @@ import os
 import signal
 import socket
 import struct
+import sys
 import threading
 import time
 
@@ -80,20 +81,49 @@ buffer_size = 1 + 13 + 9 + 80
 # Threads
 terminate_thread = False
 
+# Entry parameters
+debug = False
+file_name = 'client.cfg'
+
 
 # ----------------------------------------------------------------------------------------------------------------------
+def read_entry_parameters():
+    global debug, file_name
+
+    if len(sys.argv) > 1:
+        arg = sys.argv[1]
+        if arg == '-d':
+            debug = True
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+                  "Llegits paràmetres línia de comandes")
+        elif arg == '-c':
+            if len(sys.argv) > 2:
+                file_name = sys.argv[2]
+            else:
+                print(f"{time.strftime('%H:%M:%S', time.localtime())}: ERROR.  => "
+                      f"No es pot obrir l'arxiu de configuració:  ")
+                sys.exit()
+
 
 # Read file 'client.cfg' and save the information (Name, Situation, Elements, MAC, Local, Server, Srv-UDP) inside
 # config_data
 def read_config():
-    file = open('client.cfg', 'r')
     try:
-        for line in file:
-            key, value = line.strip().split(' = ')
+        file = open(file_name, 'r')
+        try:
+            for line in file:
+                key, value = line.strip().split(' = ')
 
-            config_data[key] = value
-    finally:
-        file.close()
+                config_data[key] = value
+        finally:
+            file.close()
+            if debug:
+                print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+                      "Llegits paràmetres arxius de configuració")
+    except Exception:
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: ERROR => "
+              f"No es pot obrir l'arxiu de configuració: {sys.argv[2]}")
+        sys.exit()
 
 
 def send_subscription():
@@ -111,8 +141,16 @@ def send_subscription():
     port = int(config_data.get('Srv-UDP'))
     sock_udp.sendto(pack, (host, port))
 
+    if debug:
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+              f"Enviat: bytes={buffer_size}, comanda={packet_dictionary.get(packet.type)}, mac={packet.MAC}, "
+              f"rndm={packet.random}, dades={packet.data}")
+
     # Change client state after sending packet
-    client_state = 'WAIT_ACK_SUBS'  # 0xa2 = WAIT_ACK_SUBS
+    if client_state != 'WAIT_ACK_SUBS':
+        client_state = 'WAIT_ACK_SUBS'  # 0xa2 = WAIT_ACK_SUBS
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+              f"Controlador passa a l'estat: {client_state}")
 
 
 def read_packet(data_action):
@@ -125,6 +163,10 @@ def read_packet(data_action):
     rcv_packet.MAC = rcv_packet.MAC.decode().strip(b'\x00'.decode())
     rcv_packet.random = rcv_packet.random.decode().strip(b'\x00'.decode())
     rcv_packet.data = rcv_packet.data.split(b'\x00')[0].decode()
+
+    print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+          f"Rebut: bytes={buffer_size}, comanda={packet_dictionary.get(rcv_packet.type)}, mac={rcv_packet.MAC}, "
+          f"rndm={rcv_packet.random}, dades={rcv_packet.data}")
 
     if data_action == 'store':
         host_server = rcv_host
@@ -146,47 +188,43 @@ def classify_packet(packet_type):
     global client_state
 
     if packet_type == 'SUBS_ACK' and client_state == 'WAIT_ACK_SUBS':
-        print(f"[{packet_type}] packet received from server.")
         subscription('SUBS_INFO')
 
     elif packet_type == 'SUBS_NACK':
-        print(f"[{packet_type}] packet received from server.")
         client_state = 'NOT_SUBSCRIBED'
-        print(f"Update client state to [{client_state}]")
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+              f"Controlador passa a l'estat: {client_state}")
 
     elif packet_type == 'SUBS_REJ':
-        print(f"[{packet_type}] packet received from server.")
         client_state = 'NOT_SUBSCRIBED'
-        print(f"Update client state to [{client_state}]")
         subscription('SUBS_REQ')
 
     elif packet_type == 'INFO_ACK' and client_state == "WAIT_ACK_INFO" and verify_server_id():
-        print(f"[{packet_type}] packet received from server.")
+        if debug:
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+                  "Acceptada la subscripció del controlador del servidor")
         client_state = 'SUBSCRIBED'
-        print(f"Update client state to [{client_state}]")
-        print("Subscription phase successfully completed!")
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+              f"Controlador passa a l'estat: {client_state}")
         communication()
 
     elif packet_type == 'HELLO':
-        # print(f"[{packet_type}] packet received from server.")
         if client_state == 'SUBSCRIBED' and verify_server_hello():  # First HELLO packet
             client_state = 'SEND_HELLO'
-            print(f"Update client state to [{client_state}]")
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+                  f"Controlador passa a l'estat: {client_state}")
 
         if not verify_server_hello() or (not client_state == 'SUBSCRIBED' and not client_state == 'SEND_HELLO'):
             send_hello(0x11)  # 0x11 = HELLO_REJ
             client_state = 'NOT_SUBSCRIBED'
-            print(f"Update client state to [{client_state}]")
             subscription('SUBS_REQ')
 
     else:  # packet_type == 'Incorrect'
         client_state = 'NOT_SUBSCRIBED'
-        print(f"Update client state to [{client_state}]")
         subscription('SUBS_REQ')
 
 
 def send_info():
-    global client_state
     tcp_port = config_data.get('Local-TCP')
     devices = config_data.get('Elements')
     data = f"{tcp_port},{devices}"
@@ -196,6 +234,11 @@ def send_info():
     host = socket.gethostbyname(config_data.get('Server'))
     port = int(rcv_packet.data)
     sock_udp.sendto(pack, (host, port))
+
+    if debug:
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+              f"Enviat: bytes={buffer_size}, comanda={packet_dictionary.get(0x03)}, mac={packet.MAC}, "
+              f"rndm={rcv_packet.random}, dades={data}")
 
 
 def verify_server_id():
@@ -212,8 +255,10 @@ def subscription(sent_packet):
     n_subs_proc = 1
     packet_type = None
     while packet_type is None and n_subs_proc <= o:
+        client_state = 'NOT_SUBSCRIBED'
         if sent_packet == 'SUBS_REQ':
-            print(f"\nSubscription process {n_subs_proc}:")
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+                  f"Controlador en l'estat: {client_state}, procés de subscripció: {n_subs_proc}")
         timeout = 0
         n_packet = 0
         while packet_type is None and n_packet < n:
@@ -225,13 +270,12 @@ def subscription(sent_packet):
             if sent_packet == 'SUBS_REQ':
                 send_subscription()
                 n_packet += 1
-                print(f"[SUBS_REQ] packet {n_packet} sent to server.")
             elif sent_packet == 'SUBS_INFO':
                 send_info()
                 n_packet += 1
-                print(f"[SUBS_INFO] packet {n_packet} sent to server.")
                 client_state = 'WAIT_ACK_INFO'  # 0xa3 = WAIT_ACK_INFO
-                print(f"Update client state to [{client_state}]")
+                print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+                      f"Controlador passa a l'estat: {client_state}")
 
             sock_udp.settimeout(timeout)
             try:
@@ -239,16 +283,12 @@ def subscription(sent_packet):
                     packet_type = read_packet('store')
                 elif sent_packet == 'SUBS_INFO':
                     packet_type = read_packet('info')
-                if packet_type is not None:
-                    print("Server response received!")
 
             except socket.timeout:
-                print(f"Timeout({timeout}s)")
+                pass
 
         n_subs_proc += 1
         if n_packet == n and n_subs_proc <= o:
-            print(f"Unable to complete subscription process {n_subs_proc - 1}.")
-            print(f"\nWaiting {u} seconds to restart the subscription process...\n")
             time.sleep(u)
 
     # Packet received
@@ -257,8 +297,8 @@ def subscription(sent_packet):
 
     # Packet not received
     else:
-        print(f"Unable to complete subscription process {n_subs_proc - 1}.")
-        print("\nSubscription process was cancelled. Server could not be reached.")
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+              f"Superat el nombre de processos de subscripció ( {n_subs_proc - 1} )")
 
 
 def send_hello(packet_type_num):
@@ -273,6 +313,10 @@ def send_hello(packet_type_num):
     n_packet = 0
     while not terminate_thread:
         sock_udp.sendto(hello_pack, (host_server, port))
+        if debug:
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+                  f"Enviat: bytes={buffer_size}, comanda={packet_dictionary.get(packet_type_num)}, mac={packet.MAC}, "
+                  f"rndm={random_server}, dades={packet.data}")
         n_packet += 1
         time.sleep(v)
 
@@ -340,7 +384,11 @@ def system_input():
 
 
 def communication():
-    print("\nCommunication process:")
+    global client_state
+
+    if debug:
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+              f"Creat procés per l'enviament periòdic de HELLO")
     global terminate_thread
     send_thread = threading.Thread(target=send_hello, args=(0x10,))
     send_thread.start()
@@ -349,11 +397,13 @@ def communication():
     timeout = v * r
     if client_state == 'SUBSCRIBED':
         sock_udp.settimeout(timeout)
+        if debug:
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+                  f"Establert temporitzador per enviament de HELLO")
         try:
             packet_type = read_packet('hello')
             classify_packet(packet_type)
         except socket.timeout:
-            print(f"Communication failure. No [HELLO] packet has arrived within {timeout}s")
             terminate_thread = True
             send_thread.join()
             classify_packet('NotHello')
@@ -362,7 +412,9 @@ def communication():
     if client_state == 'SEND_HELLO':
         # Open TCP port:
         sock_tcp.bind((host_server, int(config_data.get('Local-TCP'))))
-        print("Connection TCP client-server has been established.")
+        if debug:
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+                  f"Obert port TCP {config_data.get('Local-TCP')} per la comunicació amb el servidor")
 
         system_thread = threading.Thread(target=system_input)
         system_thread.start()
@@ -385,13 +437,23 @@ def communication():
                 strike = True
 
         sock_tcp.close()
+        if debug:
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+                  f"Tancat socket TCP per la comunicació amb el servidor")
+
         if strike_hello_miss == 3:
-            print(f"STRIKE 3. No [HELLO] packets received within {3 * timeout}s")
             terminate_thread = True
             send_thread.join()
+            client_state = 'NOT_SUBSCRIBED'
+            print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+                  f"Controlador passa a l'estat: {client_state} (Sense resposta a 3 HELLOs)")
             classify_packet('NotHello')
 
 
 if __name__ == '__main__':
+    read_entry_parameters()
     read_config()
+    if debug:
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+              f"Inici bucle de servei equip: {config_data.get('Name')}")
     subscription('SUBS_REQ')
