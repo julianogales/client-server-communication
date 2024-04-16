@@ -274,31 +274,66 @@ def send_hello(packet_type_num):
     while not terminate_thread:
         sock_udp.sendto(hello_pack, (host_server, port))
         n_packet += 1
-        # print(f"[HELLO] packet {n_packet} sent to server.")
-        # print(f"Waiting {v}s...")
         time.sleep(v)
 
 
 def system_input():
+    info_devices = []
+    devices = config_data.get('Elements').split(';')
+    dev_value = "NONE"
+
+    for device in devices:
+        info_devices.append((device, dev_value))
+
     while client_state == 'SEND_HELLO' and not terminate_thread:
         command = input()
         parts = command.split(' ')
 
         if client_state == 'SEND_HELLO':
             if command == 'stat':
-                print("Showing id date from the controller (MAC, name and situation), all the controller devices and "
-                      "their actual value...")
-            elif parts[0] == 'set' and len(parts) >= 3:
-                device_name = parts[1]
-                value = parts[2]
-                print("Simulating the read of a sensor value or the controller state and changing the value associated "
-                      "to the device <device_name> to <value>...")
-            elif parts[0] == 'send' and len(parts) >= 1:
-                device_name = parts[1]
-                print("Sending the value associated to the device <device_name> to the server...")
+                print("******************** DADES CONTROLADOR ********************")
+                print(f"  MAC: {config_data.get('MAC')}, Nom: {config_data.get('Name')}, Situació: "
+                      f"{config_data.get('Situation')}")
+
+                print(f"\n   Estat: {client_state}\n")
+
+                print("    Dispos.      valor\n    -------      ------")
+
+                for device in info_devices:
+                    dev, val = device
+                    print(f"    {dev}      {val}")
+
+                print("\n***********************************************************")
+
+            elif parts[0] == 'set':
+                if len(parts) >= 3:
+                    device_name = parts[1]
+                    value = parts[2]
+                    exists = False
+                    for device in info_devices:
+                        dev, val = device
+                        if dev == device_name:
+                            exists = True
+                            device.val = value
+                    if not exists:
+                        print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+                              f"Element: [{device_name}] no pertany al controlador")
+                else:
+                    print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+                          f"Error de sintàxi. (set <element> <valor>)")
+
+            elif parts[0] == 'send':
+                if len(parts) >= 1:
+                    device_name = parts[1]
+                    print("Sending the value associated to the device <device_name> to the server...")
+                else:
+                    print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+                          f"Error de sintàxi. (send <element>)")
+
             elif command == 'quit':
                 print("Terminating client execution. Closing communication ports and terminating all the processes.")
                 os.kill(os.getppid(), signal.SIGINT)
+
             else:
                 print("Unknown command. Please enter one of the following commands:"
                       "\n- stat\n- set <device_name> <value>\n- send <device_name>\n- quit")
