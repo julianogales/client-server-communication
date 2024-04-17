@@ -54,9 +54,9 @@ void read_controllers() {
         char *key = strtok(line, ",");
         char *val = strtok(NULL, "\n");
 
-        if (strcmp(key, "Name") == 0) { strcpy(config_data.Name, val);}
-        else if (strcmp(key, "MAC") == 0) {strcpy(config_data.MAC, val);}
-        else if (strcmp(key, "State") == 0) {config_data.UDP_port = atoi(val);}
+        if (strcmp(key, "Name") == 0) { strcpy(controllers_data.Name, val);}
+        else if (strcmp(key, "MAC") == 0) {strcpy(controllers_data.MAC, val);}
+        else if (strcmp(key, "State") == 0) {strcpy(controllers_data.State, val);}
     }
 
     fclose(file);
