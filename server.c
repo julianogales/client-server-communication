@@ -74,9 +74,9 @@ void read_controllers() {
 }
 
 void udp_socket() {
+    struct sockaddr_in addr;
     sock_udp = socket(AF_INET, SOCK_DGRAM, 0);
 
-    struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(config_data.UDP_port);
@@ -85,9 +85,9 @@ void udp_socket() {
 }
 
 void tcp_socket() {
+    struct sockaddr_in addr;
     sock_tcp = socket(AF_INET, SOCK_STREAM, 0);
 
-    struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(config_data.TCP_port);
@@ -104,6 +104,7 @@ void subscription_request() {
 int main() {
     read_config();
     read_controllers();
+    printf("");
     udp_socket();
     tcp_socket();
 
