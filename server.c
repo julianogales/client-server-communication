@@ -181,7 +181,6 @@ void udp_socket() {
     addr.sin_port = htons(config_data.UDP_port);
 
     bind(sock_udp, (struct sockaddr *) &addr, sizeof(struct sockaddr_in));
-    if (debug) { print_msg_time("DEBUG => Socket UDP actiu\n"); }
 }
 
 void tcp_socket() {
@@ -194,7 +193,6 @@ void tcp_socket() {
 
     bind(sock_tcp, (struct sockaddr *) &addr, sizeof(struct sockaddr_in));
     listen(sock_tcp, 5);
-    if (debug) { print_msg_time("DEBUG => Socket TCP actiu\n"); }
 }
 
 void *classify_packet(void *arg);
@@ -220,6 +218,7 @@ void read_packet() {
 
     arg[0] = buffer; arg[1] = client_host; arg[2] = (char *) &client_port;
     pthread_create(&thread, NULL, classify_packet, arg);
+    print_msg_time("DEBUG => Rebut paquet UDP, creat procés per atendre'l\n");
     sleep(300);
 }
 
@@ -227,15 +226,16 @@ void send_packet();
 void subs_request();
 
 void *classify_packet(void *arg) {
-    char *buffer = ((char **) arg)[0];
-    Packet *rcv_packet = (Packet *) buffer;
+    Packet *rcv_packet = (Packet *) ((char **) arg)[0];
+    char *host = ((char **) arg)[1];
+    int port = *(int*) ((char **) arg)[2];
     int pos = verify_client_id(*rcv_packet);
 
     if (strcmp(packet_dictionary(rcv_packet->type), "SUBS_REQ") == 0) {
         if (pos >= 0 && strcmp(controllers_data[pos].State, "DISCONNECTED") == 0) {
-            subs_request();
+            subs_request(arg, pos);
         } else {
-            send_packet(arg, "SUBS_REJ");
+            send_packet(rcv_packet, host, port, "SUBS_REJ", pos);
         }
     }
     return NULL;
@@ -246,37 +246,63 @@ Packet build_packet(Packet rcv_packet, char* packet_type) {
     if (strcmp(packet_type, "SUBS_REJ") == 0) {
         packet.type = 0x02;
         strcpy(packet.mac, rcv_packet.mac); strcpy(packet.random, "00000000");
-        strcpy(packet.data, "Dades incorrectes");
+        strcpy(packet.data, "Dades d'identificació incorrectes");
     }
     return packet;
 }
 
-void send_packet(void *arg, char* packet_type) {
-    Packet *rcv_packet = (Packet *) ((char **) arg)[0];
-    char *host = ((char **) arg)[1];
-    int port = *(int*) ((char **) arg)[2];
-
-    Packet packet = build_packet(*rcv_packet, packet_type);
+void send_packet(Packet rcv_packet, char* host, int port, char* packet_type, int pos) {
+    Packet packet = build_packet(rcv_packet, packet_type);
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     inet_pton(AF_INET, host, &addr.sin_addr);
 
-    printf("Port: %i\n", port);
     sendto(sock_udp, &packet, sizeof(Packet), 0, (struct sockaddr *) &addr, sizeof(addr));
+    if (strcmp(packet_type, "SUBS_REJ") == 0) { strcpy(controllers_data[pos].State, "DISCONNECTED"); }
 }
 
-void subs_request() {
-    printf("HELLO\n");
-    random_number(0);
+void send_new_packet(Packet packet, int port, char* host, int pos);
+
+void subs_request(void* arg, int pos) {
+    Packet packet;
+    Packet *rcv_packet = (Packet *) ((char **) arg)[0];
+    char *host = ((char **) arg)[1];
+    int client_port = *(int*) ((char **) arg)[2];
+    char* random = random_number(2);
+
+    /* Open UDP port */
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    int open_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int port;
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(0);
+    bind(open_sock, (struct sockaddr *) &addr, sizeof(struct sockaddr_in));
+    getsockname(open_sock, (struct sockaddr *) &addr, &addr_len);
+    /**/
+
+    packet.type = 0x01; strcpy(packet.mac, rcv_packet->mac); strcpy(packet.random, random);
+    port = htons(addr.sin_port); sprintf(packet.data, "%i", port);
+    send_new_packet(packet, client_port, host, pos);
 }
+
+void send_new_packet(Packet packet, int port, char* host, int pos) {
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    sendto(sock_udp, &packet, sizeof(Packet), 0, (struct sockaddr *) &addr, sizeof(addr));
+    if (packet.type == 0x01) { strcpy(controllers_data[pos].State, "WAIT_INFO"); }
+}
+
 
 int main(int argc, char *argv[]) {
     read_entry_parameters(argc, argv);
     read_controllers();
     read_config();
-    udp_socket();
-    tcp_socket();
+    udp_socket(); if (debug) { print_msg_time("DEBUG => Socket UDP actiu\n"); }
+    tcp_socket(); if (debug) { print_msg_time("DEBUG => Socket TCP actiu\n"); }
     read_packet();
 
     return 0;
