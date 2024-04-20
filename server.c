@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/select.h>
 
 /* ------------------------------------------------ GLOBAL VARIABLES ------------------------------------------------ */
 /* DICTIONARY */
@@ -69,6 +70,10 @@ int sock_tcp;
 /* ENTRY PARAMETERS */
 bool debug = true;
 char *file_name = "server.cfg";
+
+/* TIMERS */
+int s = 2;
+int init = 2;
 
 /* ----------------------------------------------------------------------------------------------------------------- */
 
@@ -208,22 +213,24 @@ void read_packet() {
     pthread_t thread;
     char *arg[3];
 
-    recvfrom(sock_udp, buffer, sizeof(Packet), 0, (struct sockaddr *) &client_addr, &addr_len);
-    rcv_packet = (Packet *) buffer;
-    print_msg_time("DEBUG => Rebut: ");printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
-        buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
+    while (true) {
+        recvfrom(sock_udp, buffer, sizeof(Packet), 0, (struct sockaddr *) &client_addr, &addr_len);
+        rcv_packet = (Packet *) buffer;
+        print_msg_time("DEBUG => Rebut: ");printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
+            buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
 
-    inet_ntop(AF_INET, &client_addr.sin_addr, client_host, INET_ADDRSTRLEN);
-    client_port = ntohs(client_addr.sin_port);
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_host, INET_ADDRSTRLEN);
+        client_port = ntohs(client_addr.sin_port);
 
-    arg[0] = buffer; arg[1] = client_host; arg[2] = (char *) &client_port;
-    pthread_create(&thread, NULL, classify_packet, arg);
-    print_msg_time("DEBUG => Rebut paquet UDP, creat procés per atendre'l\n");
-    sleep(300);
+        arg[0] = buffer; arg[1] = client_host; arg[2] = (char *) &client_port;
+        pthread_create(&thread, NULL, classify_packet, arg);
+        print_msg_time("DEBUG => Rebut paquet UDP, creat procés per atendre'l\n");
+    }
 }
 
 void send_packet();
 void subs_request();
+void subs_info();
 
 void *classify_packet(void *arg) {
     Packet *rcv_packet = (Packet *) ((char **) arg)[0];
@@ -231,12 +238,14 @@ void *classify_packet(void *arg) {
     int port = *(int*) ((char **) arg)[2];
     int pos = verify_client_id(*rcv_packet);
 
-    if (strcmp(packet_dictionary(rcv_packet->type), "SUBS_REQ") == 0) {
-        if (pos >= 0 && strcmp(controllers_data[pos].State, "DISCONNECTED") == 0) {
-            subs_request(arg, pos);
-        } else {
-            send_packet(rcv_packet, host, port, "SUBS_REJ", pos);
-        }
+    if (strcmp(packet_dictionary(rcv_packet->type), "SUBS_REQ") == 0 &&
+        pos >= 0 && strcmp(controllers_data[pos].State, "DISCONNECTED") == 0) {
+        subs_request(arg, pos);
+    } else if (strcmp(packet_dictionary(rcv_packet->type), "SUBS_INFO") == 0 &&
+        pos >= 0 && strcmp(controllers_data[pos].State, "WAIT_INFO") == 0) {
+        subs_info(arg, pos);
+    } else {
+        send_packet(rcv_packet, host, port, "SUBS_REJ", pos);
     }
     return NULL;
 }
@@ -262,12 +271,11 @@ void send_packet(Packet rcv_packet, char* host, int port, char* packet_type, int
     if (strcmp(packet_type, "SUBS_REJ") == 0) { strcpy(controllers_data[pos].State, "DISCONNECTED"); }
 }
 
-void send_new_packet(Packet packet, int port, char* host, int pos);
+void send_new_packet(Packet packet, int port, int pos);
 
 void subs_request(void* arg, int pos) {
     Packet packet;
     Packet *rcv_packet = (Packet *) ((char **) arg)[0];
-    char *host = ((char **) arg)[1];
     int client_port = *(int*) ((char **) arg)[2];
     char* random = random_number(2);
 
@@ -285,15 +293,54 @@ void subs_request(void* arg, int pos) {
 
     packet.type = 0x01; strcpy(packet.mac, rcv_packet->mac); strcpy(packet.random, random);
     port = htons(addr.sin_port); sprintf(packet.data, "%i", port);
-    send_new_packet(packet, client_port, host, pos);
+    send_new_packet(packet, client_port, pos);
+
+    /* Wait for SUBS_INFO packet */
+    if (strcmp(controllers_data[pos].State, "WAIT_INFO") == 0) {
+        char *buffer = malloc(buffer_size);
+        char *client_host = malloc(INET_ADDRSTRLEN);
+        char* args[3];
+
+        fd_set fds;
+        struct timeval tv;
+        int timeout;
+        tv.tv_sec = s * init;
+        tv.tv_usec = 0;
+        FD_ZERO(&fds);
+        FD_SET(open_sock, &fds);
+
+        timeout = select(open_sock+1, &fds, NULL, NULL, &tv);
+
+        if (timeout > 0) {
+            recvfrom(open_sock, buffer, sizeof(Packet), 0, (struct sockaddr *) &addr, &addr_len);
+            rcv_packet = (Packet *) buffer;
+            print_msg_time("DEBUG => Rebut: ");printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
+                buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
+
+            inet_ntop(AF_INET, &addr.sin_addr, client_host, INET_ADDRSTRLEN);
+            client_port = ntohs(addr.sin_port);
+
+            args[0] = buffer; args[1] = client_host; args[2] = (char *) &client_port;
+            classify_packet(args);
+        } else {
+            strcpy(controllers_data[pos].State, "DISCONNECTED");
+            exit(0);
+        }
+    }
 }
 
-void send_new_packet(Packet packet, int port, char* host, int pos) {
+void send_new_packet(Packet packet, int port, int pos) {
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     sendto(sock_udp, &packet, sizeof(Packet), 0, (struct sockaddr *) &addr, sizeof(addr));
-    if (packet.type == 0x01) { strcpy(controllers_data[pos].State, "WAIT_INFO"); }
+    if (packet.type == 0x01) {
+        strcpy(controllers_data[pos].State, "WAIT_INFO");
+    }
+}
+
+void subs_info(void* arg, int pos) {
+
 }
 
 
