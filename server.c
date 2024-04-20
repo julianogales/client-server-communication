@@ -206,10 +206,11 @@ void read_packet() {
     Packet *rcv_packet;
 
     struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
     pthread_t thread;
     char *arg[3];
 
-    recvfrom(sock_udp, buffer, sizeof(Packet), 0, (struct sockaddr *) &client_addr, (socklen_t *) sizeof(&client_addr));
+    recvfrom(sock_udp, buffer, sizeof(Packet), 0, (struct sockaddr *) &client_addr, &addr_len);
     rcv_packet = (Packet *) buffer;
     print_msg_time("DEBUG => Rebut: ");printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
         buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
@@ -234,7 +235,7 @@ void *classify_packet(void *arg) {
         if (pos >= 0 && strcmp(controllers_data[pos].State, "DISCONNECTED") == 0) {
             subs_request();
         } else {
-            send_packet(rcv_packet, "SUBS_REJ", arg[2], arg[1]);
+            send_packet(arg, "SUBS_REJ");
         }
     }
     return NULL;
@@ -250,16 +251,19 @@ Packet build_packet(Packet rcv_packet, char* packet_type) {
     return packet;
 }
 
-void send_packet(Packet rcv_packet, char* packet_type, char* client_port, char* client_host) {
-    Packet send_packet = build_packet(rcv_packet, packet_type);
-    struct sockaddr_in client_addr;
-    int port = (int) client_port;
+void send_packet(void *arg, char* packet_type) {
+    Packet *rcv_packet = (Packet *) ((char **) arg)[0];
+    char *host = ((char **) arg)[1];
+    int port = *(int*) ((char **) arg)[2];
 
-    client_addr.sin_family = AF_INET;
-    client_addr.sin_port = htons(port);
-    inet_pton(AF_INET, client_host, &client_addr.sin_addr);
+    Packet packet = build_packet(*rcv_packet, packet_type);
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, host, &addr.sin_addr);
 
-    sendto(sock_udp, &send_packet, sizeof(Packet), 0, (struct sockaddr *) &client_addr, sizeof(client_addr));
+    printf("Port: %i\n", port);
+    sendto(sock_udp, &packet, sizeof(Packet), 0, (struct sockaddr *) &addr, sizeof(addr));
 }
 
 void subs_request() {
