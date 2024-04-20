@@ -8,6 +8,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <unistd.h>
 
 /* ------------------------------------------------ GLOBAL VARIABLES ------------------------------------------------ */
 /* DICTIONARY */
@@ -48,6 +49,7 @@ typedef struct {
     char Random[30];
     char Situation[30];
     char Elements[30];
+    int n_elems;
 } ControllersData;
 ControllersData controllers_data[10];
 
@@ -56,9 +58,8 @@ typedef struct {
     char mac[13];
     char random[9];
     char data[80];
-    int size = 1 + 13 + 9 + 80;
 } Packet;
-
+int buffer_size = 1 + 13 + 9 + 80;
 
 /* SOCKETS */
 int sock_udp;
@@ -77,6 +78,38 @@ void print_msg_time(char *msg) {
     printf("%02d:%02d:%02d: %s", tm.tm_hour, tm.tm_min, tm.tm_sec, msg);
 }
 
+char** get_controllers_info(char *data) {
+    char **controllers_info = malloc(2 * sizeof(char*));
+    controllers_info[0] = strtok(data, ",");
+    controllers_info[1] = strtok(NULL, "\n");
+    return controllers_info;
+}
+
+int verify_client_id(Packet rcv_packet) {
+    int i = 0;
+    char** controllers_info = get_controllers_info(rcv_packet.data);
+    char* rcv_packet_name = controllers_info[0];
+    char* rcv_packet_situation = controllers_info[1];
+
+    while (i < controllers_data->n_elems) {
+        if (strcmp(controllers_data[i].MAC, rcv_packet.mac) == 0 && strcmp(controllers_data[i].Name, rcv_packet_name) == 0) {
+            if (strcmp("00000000", rcv_packet.random) == 0 && strcmp("", rcv_packet_situation) != 0) return i;
+        } i++;
+    }
+    return -1;
+}
+
+char* random_number(int seed) {
+    int i = 0; char random_aux[9];
+    char *random = malloc(sizeof(random_aux));
+
+    while (i < 8) {
+        random[i] = '0' + (seed + rand() % 10);
+        i++;
+    }
+    random[i] = '\0';
+    return random;
+}
 
 void read_entry_parameters(int argc, char *argv[]) {
     if (argc >= 2) {
@@ -105,11 +138,12 @@ void read_controllers() {
         strcpy(controllers_data[nline].Name, name);
         strcpy(controllers_data[nline].MAC, mac);
         strcpy(controllers_data[nline].State, "DISCONNECTED");
-
         nline++;
     }
+    controllers_data->n_elems = nline;
     fclose(file);
 
+    printf("Number of controllers: %i\n", controllers_data->n_elems);
     if (debug) {
         print_msg_time("DEBUG => Llegits 6 autoritzats en el sistema\n");
         printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
@@ -163,24 +197,74 @@ void tcp_socket() {
     if (debug) { print_msg_time("DEBUG => Socket TCP actiu\n"); }
 }
 
-void receive_packets() {
-    char *buffer = malloc(sizeof(Packet));
-    char *client_host = malloc(INET_ADDRSTRLEN);
-    char *client_port;
-    Packet *rcv_packet;
-    struct sockaddr_in client_addr;
+void *classify_packet(void *arg);
 
-    recvfrom(sock_udp, buffer, sizeof(Packet), 0, &client_addr, (socklen_t *) sizeof(&client_addr));
+void read_packet() {
+    char *buffer = malloc(buffer_size);
+    char *client_host = malloc(INET_ADDRSTRLEN);
+    int client_port;
+    Packet *rcv_packet;
+
+    struct sockaddr_in client_addr;
+    pthread_t thread;
+    char *arg[3];
+
+    recvfrom(sock_udp, buffer, sizeof(Packet), 0, (struct sockaddr *) &client_addr, (socklen_t *) sizeof(&client_addr));
     rcv_packet = (Packet *) buffer;
-    print_msg_time("DEBUG => Rebut: ");printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s",
-        rcv_packet->size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
+    print_msg_time("DEBUG => Rebut: ");printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
+        buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
 
     inet_ntop(AF_INET, &client_addr.sin_addr, client_host, INET_ADDRSTRLEN);
+    client_port = ntohs(client_addr.sin_port);
 
+    arg[0] = buffer; arg[1] = client_host; arg[2] = (char *) &client_port;
+    pthread_create(&thread, NULL, classify_packet, arg);
+    sleep(300);
 }
 
-void subscription_request() {
+void send_packet();
+void subs_request();
 
+void *classify_packet(void *arg) {
+    char *buffer = ((char **) arg)[0];
+    Packet *rcv_packet = (Packet *) buffer;
+    int pos = verify_client_id(*rcv_packet);
+
+    if (strcmp(packet_dictionary(rcv_packet->type), "SUBS_REQ") == 0) {
+        if (pos >= 0 && strcmp(controllers_data[pos].State, "DISCONNECTED") == 0) {
+            subs_request();
+        } else {
+            send_packet(rcv_packet, "SUBS_REJ", arg[2], arg[1]);
+        }
+    }
+    return NULL;
+}
+
+Packet build_packet(Packet rcv_packet, char* packet_type) {
+    Packet packet;
+    if (strcmp(packet_type, "SUBS_REJ") == 0) {
+        packet.type = 0x02;
+        strcpy(packet.mac, rcv_packet.mac); strcpy(packet.random, "00000000");
+        strcpy(packet.data, "Dades incorrectes");
+    }
+    return packet;
+}
+
+void send_packet(Packet rcv_packet, char* packet_type, char* client_port, char* client_host) {
+    Packet send_packet = build_packet(rcv_packet, packet_type);
+    struct sockaddr_in client_addr;
+    int port = (int) client_port;
+
+    client_addr.sin_family = AF_INET;
+    client_addr.sin_port = htons(port);
+    inet_pton(AF_INET, client_host, &client_addr.sin_addr);
+
+    sendto(sock_udp, &send_packet, sizeof(Packet), 0, (struct sockaddr *) &client_addr, sizeof(client_addr));
+}
+
+void subs_request() {
+    printf("HELLO\n");
+    random_number(0);
 }
 
 int main(int argc, char *argv[]) {
@@ -189,8 +273,7 @@ int main(int argc, char *argv[]) {
     read_config();
     udp_socket();
     tcp_socket();
-    receive_packets();
+    read_packet();
 
-    subscription_request();
     return 0;
 }
