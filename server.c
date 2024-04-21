@@ -8,8 +8,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/select.h>
+#include <signal.h>
 
 /* ------------------------------------------------ GLOBAL VARIABLES ------------------------------------------------ */
 /* DICTIONARY */
@@ -62,14 +64,23 @@ typedef struct {
 } Packet;
 int buffer_size = 1 + 13 + 9 + 80;
 
+typedef struct {
+    Packet packet;
+    struct sockaddr_in client_addr;
+    char* host;
+    char* client_port;
+} Args;
+
+pid_t pid;
+
 /* SOCKETS */
 int sock_udp;
 int sock_tcp;
 
-
 /* ENTRY PARAMETERS */
 bool debug = true;
-char *file_name = "server.cfg";
+char *config_file = "server.cfg";
+char *controllers_file = "controllers.dat";
 
 /* TIMERS */
 int s = 2;
@@ -85,8 +96,8 @@ void print_msg_time(char *msg) {
 
 char** get_controllers_info(char *data) {
     char **controllers_info = malloc(2 * sizeof(char*));
-    controllers_info[0] = strtok(data, ",");
-    controllers_info[1] = strtok(NULL, "\n");
+    controllers_info[0] = strtok(data, ",");  /* Name */
+    controllers_info[1] = strtok(NULL, "\n"); /* Situation */
     return controllers_info;
 }
 
@@ -123,18 +134,22 @@ void read_entry_parameters(int argc, char *argv[]) {
             print_msg_time("DEBUG => Llegits paràmetres línia de comandes\n");
         }
         else if (strcmp(argv[1], "-c") == 0) {
-            if (argc >= 3) { file_name = argv[2]; }
+            if (argc >= 3) { config_file = argv[2]; }
             else { print_msg_time("ERROR => No es pot obrir l'arxiu de configuració: \n"); }
+        } else if (strcmp(argv[1], "-u") == 0) {
+            if (argc >= 3) { controllers_file = argv[2]; }
+            else { print_msg_time("ERROR => No es pot obrir l'arxiu dels controladors: \n"); }
         }
     }
 }
 
+void list_controllers();
+
 /* Read file 'controllers.dat' and save the information (Name, MAC, State, IP, Random, Situation, Elements) inside controllers_data.*/
 void read_controllers() {
-    FILE *file = fopen("controllers.dat", "r");
+    FILE *file = fopen(controllers_file, "r");
     char line[25];
     int nline = 0;
-    int i = 0;
 
     while (fgets(line, sizeof(line), file)) {
         char *name = strtok(line, ",");
@@ -148,20 +163,24 @@ void read_controllers() {
     controllers_data->n_elems = nline;
     fclose(file);
 
-    printf("Number of controllers: %i\n", controllers_data->n_elems);
     if (debug) {
-        print_msg_time("DEBUG => Llegits 6 autoritzats en el sistema\n");
-        printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
-        while (nline > i) {
-            printf("%s              - %s          %s\n", controllers_data[i].Name, controllers_data[i].MAC, controllers_data[i].State);
-            i++;
-        }
+        print_msg_time("DEBUG => Llegits "); printf("%i autoritats en el sistema\n", controllers_data->n_elems);
+        list_controllers();
+    }
+}
+
+void list_controllers() {
+    int i = 0;
+    printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
+    while (controllers_data->n_elems > i) {
+        printf("%s              - %s          %s\n", controllers_data[i].Name, controllers_data[i].MAC, controllers_data[i].State);
+        i++;
     }
 }
 
 /* Read file 'server.cfg' and save the information (Name, MAC, UDP-port, TCP-port) inside config_data.*/
 void read_config() {
-    FILE *file = fopen(file_name, "r");
+    FILE *file = fopen(config_file, "r");
     char line[25];
 
     while (fgets(line, sizeof(line), file)) {
@@ -200,31 +219,31 @@ void tcp_socket() {
     listen(sock_tcp, 5);
 }
 
-void *classify_packet(void *arg);
+void *classify_packet();
 
 void read_packet() {
-    char *buffer = malloc(buffer_size);
     char *client_host = malloc(INET_ADDRSTRLEN);
     int client_port;
-    Packet *rcv_packet;
+    Packet rcv_packet;
 
     struct sockaddr_in client_addr;
     socklen_t addr_len = sizeof(client_addr);
     pthread_t thread;
-    char *arg[3];
+    Args arg;
 
     while (true) {
-        recvfrom(sock_udp, buffer, sizeof(Packet), 0, (struct sockaddr *) &client_addr, &addr_len);
-        rcv_packet = (Packet *) buffer;
-        print_msg_time("DEBUG => Rebut: ");printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
-            buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
+        recvfrom(sock_udp, &rcv_packet, sizeof(Packet), 0, (struct sockaddr *) &client_addr, &addr_len);
 
+        if (debug) {
+            print_msg_time("DEBUG => Rebut: "); printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
+            buffer_size, packet_dictionary(rcv_packet.type), rcv_packet.mac, rcv_packet.random, rcv_packet.data);
+        }
         inet_ntop(AF_INET, &client_addr.sin_addr, client_host, INET_ADDRSTRLEN);
         client_port = ntohs(client_addr.sin_port);
 
-        arg[0] = buffer; arg[1] = client_host; arg[2] = (char *) &client_port;
-        pthread_create(&thread, NULL, classify_packet, arg);
-        print_msg_time("DEBUG => Rebut paquet UDP, creat procés per atendre'l\n");
+        arg.packet = rcv_packet; arg.host = client_host; arg.client_port = (char *) &client_port; arg.client_addr = client_addr;
+        pthread_create(&thread, NULL, classify_packet, &arg);
+        if (debug) print_msg_time("DEBUG => Rebut paquet UDP, creat procés per atendre'l\n");
     }
 }
 
@@ -232,18 +251,20 @@ void send_packet();
 void subs_request();
 void subs_info();
 
-void *classify_packet(void *arg) {
-    Packet *rcv_packet = (Packet *) ((char **) arg)[0];
-    char *host = ((char **) arg)[1];
-    int port = *(int*) ((char **) arg)[2];
-    int pos = verify_client_id(*rcv_packet);
+void *classify_packet(Args *arg) {
+    Args *args = arg;
+    struct sockaddr_in client_addr = args->client_addr;
+    Packet rcv_packet = args->packet;
+    char *host = args->host;
+    int port = *(int*) args->client_port;
+    int pos = verify_client_id(rcv_packet);
 
-    if (strcmp(packet_dictionary(rcv_packet->type), "SUBS_REQ") == 0 &&
+    if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_REQ") == 0 &&
         pos >= 0 && strcmp(controllers_data[pos].State, "DISCONNECTED") == 0) {
         subs_request(arg, pos);
-    } else if (strcmp(packet_dictionary(rcv_packet->type), "SUBS_INFO") == 0 &&
+    } else if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_INFO") == 0 &&
         pos >= 0 && strcmp(controllers_data[pos].State, "WAIT_INFO") == 0) {
-        subs_info(arg, pos);
+        subs_info(arg, pos, client_addr);
     } else {
         send_packet(rcv_packet, host, port, "SUBS_REJ", pos);
     }
@@ -339,10 +360,31 @@ void send_new_packet(Packet packet, int port, int pos) {
     }
 }
 
-void subs_info(void* arg, int pos) {
+void subs_info(void *arg, int pos, struct sockaddr_in client_addr) {
+    Packet *rcv_packet = (Packet *) ((char **) arg)[0];
 
+    sendto(sock_udp, &rcv_packet, sizeof(Packet), 0, (struct sockaddr *) &client_addr, sizeof(client_addr));
+    strcpy(controllers_data[pos].State, "SUBSCRIBED");
+    printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
+    printf("%s              - %s          %s\n", controllers_data[pos].Name, controllers_data[pos].MAC, controllers_data[pos].State);
 }
 
+void *system_info(void *args) {
+    char input[100];
+
+    while (true) {
+        scanf("%s", input);
+        if (strcmp(input, "list") == 0) list_controllers();
+        else if (strcmp(input, "set") == 0) printf("Sending information to an entry element of the controller...\n");
+        else if (strcmp(input, "get") == 0) printf("Requesting information of the element of the controller...\n");
+        else if (strcmp(input, "quit") == 0) kill(pid, SIGKILL);
+        else {
+            printf("Unknown command. Please enter one of the following commands:\n");
+            printf("- list\n- set <controller_name> <device_name> <value>\n- get <controller_name> <device_name>\n- quit");
+        }
+        return NULL;
+    }
+}
 
 int main(int argc, char *argv[]) {
     read_entry_parameters(argc, argv);
