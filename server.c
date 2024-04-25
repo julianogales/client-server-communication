@@ -283,22 +283,6 @@ void *classify_packet(Args *args) {
     return NULL;
 }
 
-struct sockaddr_in open_udp_port(void) {
-    struct sockaddr_in new_addr_srv;
-    socklen_t new_addr_len = sizeof(new_addr_srv);
-    int new_udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-
-    memset(&new_addr_srv, 0, sizeof(struct sockaddr_in));
-    new_addr_srv.sin_family = AF_INET;
-    new_addr_srv.sin_addr.s_addr = htonl(INADDR_ANY);
-    new_addr_srv.sin_port = htons(0);
-
-    bind(new_udp_socket, (struct sockaddr *) &new_addr_srv, sizeof(struct sockaddr_in));
-    getsockname(new_udp_socket, (struct sockaddr *) &new_addr_srv, &new_addr_len);
-    printf("port obert\n");
-    return new_addr_srv;
-}
-
 void subs_request(Args arg, int pos) {
     /* ----- VARIABLES ----- */
     Packet packet_to_send;
@@ -309,7 +293,7 @@ void subs_request(Args arg, int pos) {
     char data_to_send[80];
     int port;
 
-    struct sockaddr_in client_addr;
+    struct sockaddr_in client_addr = arg.client_addr;
     struct sockaddr_in new_addr_srv;
     socklen_t new_addr_len = sizeof(new_addr_srv);
     int new_udp_socket;
@@ -319,12 +303,6 @@ void subs_request(Args arg, int pos) {
     struct timeval tv;
     int timeout;
     /* --------------------- */
-
-    /* Where will the packet be sent */
-    memset(&client_addr, 0, sizeof(client_addr));
-    client_addr.sin_family = AF_INET;
-    client_addr.sin_port = htons(client_port);
-    inet_pton(AF_INET, client_host, &client_addr.sin_port);
 
     /* Open new UDP port */
     new_udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
