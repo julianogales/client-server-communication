@@ -13,6 +13,11 @@
 #include <sys/select.h>
 #include <signal.h>
 
+/* ------------------------------------------------ DECLARED METHODS ------------------------------------------------ */
+void list_controllers();
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+
 /* ------------------------------------------------ GLOBAL VARIABLES ------------------------------------------------ */
 /* DICTIONARY */
 char *packet_dictionary(unsigned char packet_type) {
@@ -89,7 +94,7 @@ int init = 2;
 /* THREADS */
 pthread_t console;
 
-/* ----------------------------------------------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------------------------------------------------ */
 
 void print_msg_time(char *msg) {
     time_t now = time(NULL);
@@ -104,20 +109,24 @@ char** get_controllers_info(char *data) {
     return controllers_info;
 }
 
+/* NEED TO FIX VERIFY_CLIENT_ID!!! */
 int verify_client_id(Packet rcv_packet) {
     int i = 0; int pos = -1;
     char** controllers_info = get_controllers_info(rcv_packet.data);
     char* rcv_packet_name = controllers_info[0];
     char* rcv_packet_situation = controllers_info[1];
 
-    while (i < controllers_data->n_elems) {
-        if (strcmp(controllers_data[i].MAC, rcv_packet.mac) == 0) pos = i;
+    while (i < controllers_data->n_elems && pos < 0) {
+        if (strcmp(controllers_data[i].MAC, rcv_packet.mac) == 0 && strcmp(controllers_data[i].Name, rcv_packet_name) == 0) pos = i;
         i++;
     }
 
+    printf("Pos: %i\n", pos);
+    printf("Type: %s  -  Random: %s - %s\n", packet_dictionary(rcv_packet.type), controllers_data[0].Random, rcv_packet.random);
+
     if (pos >= 0) {
-        if (rcv_packet.type == 0x00 && strcmp(controllers_data[pos].Name, rcv_packet_name) == 0 &&
-        strcmp("00000000", rcv_packet.random) == 0 && strcmp("", rcv_packet_situation) != 0) return pos;
+        if (rcv_packet.type == 0x00 && strcmp("00000000", rcv_packet.random) == 0 && strcmp("", rcv_packet_situation) != 0) return pos;
+        else if (rcv_packet.type == 0x03 && strcmp(controllers_data[pos].Random, rcv_packet.random) == 0) return pos;
     }
     return -1;
 }
@@ -126,7 +135,7 @@ char* random_number(int seed) {
     int i = 0; char random_aux[9];
     char *random = (char*) malloc(sizeof(random_aux));
     while (i < 8) {
-        random[i] = '0' + (seed + rand() % 8);
+        random[i] = '0' + ((seed + rand()) % 10);
         i++;
     }
     random[i] = '\0';
@@ -277,7 +286,6 @@ void *classify_packet(Args *args) {
     int pos = verify_client_id(rcv_packet);
 
     if (pos >= 0 && strcmp(packet_dictionary(rcv_packet.type), "SUBS_REQ") == 0) {
-        printf("PAQUET CLASSIFICAT.\n");
         subs_request(*args, pos);
     }
     return NULL;
@@ -314,13 +322,6 @@ void subs_request(Args arg, int pos) {
 
     bind(new_udp_socket, (struct sockaddr *) &new_addr_srv, sizeof(struct sockaddr_in));
     getsockname(new_udp_socket, (struct sockaddr *) &new_addr_srv, &new_addr_len);
-    printf("port obert\n");
-
-    /* Wait for SUBS_INFO packet */
-    tv.tv_sec = s * init;
-    tv.tv_usec = 0;
-    FD_ZERO(&fds);
-    FD_SET(new_udp_socket, &fds);
 
     /* Build packet to send */
     port = htons(new_addr_srv.sin_port);
@@ -339,6 +340,29 @@ void subs_request(Args arg, int pos) {
     strcpy(controllers_data[pos].State, "WAIT_INFO");
     print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[pos].State);
 
+
+    /* Wait for SUBS_INFO packet */
+    tv.tv_sec = s * init;
+    tv.tv_usec = 0;
+    FD_ZERO(&fds);
+    FD_SET(new_udp_socket, &fds);
+
+    timeout = select(new_udp_socket+1, &fds, NULL, NULL, &tv);
+    if (timeout > 0) {
+        recvfrom(new_udp_socket, buffer, sizeof(Packet), 0, (struct sockaddr *) &client_addr, &new_addr_len);
+        rcv_packet = *(Packet *) buffer;
+        if (debug) {
+            print_msg_time("DEBUG => Rebut: "); printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
+                                                       buffer_size, packet_dictionary(rcv_packet.type), rcv_packet.mac, rcv_packet.random, rcv_packet.data);
+        }
+
+        if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_INFO") == 0) {
+            pos = verify_client_id(rcv_packet); /* <-- ERRROR a VERIFY_CLIENT_ID */
+            if (pos >= 0) {
+                printf("Client verificat\n");
+            }
+        }
+    }
 }
 
 int main(int argc, char *argv[]) {
