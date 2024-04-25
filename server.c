@@ -78,13 +78,16 @@ int sock_udp;
 int sock_tcp;
 
 /* ENTRY PARAMETERS */
-bool debug = true;
+bool debug = false;
 char *config_file = "server.cfg";
 char *controllers_file = "controllers.dat";
 
 /* TIMERS */
 int s = 2;
 int init = 2;
+
+/* THREADS */
+pthread_t console;
 
 /* ----------------------------------------------------------------------------------------------------------------- */
 
@@ -102,25 +105,28 @@ char** get_controllers_info(char *data) {
 }
 
 int verify_client_id(Packet rcv_packet) {
-    int i = 0;
+    int i = 0; int pos = -1;
     char** controllers_info = get_controllers_info(rcv_packet.data);
     char* rcv_packet_name = controllers_info[0];
     char* rcv_packet_situation = controllers_info[1];
 
     while (i < controllers_data->n_elems) {
-        if (strcmp(controllers_data[i].MAC, rcv_packet.mac) == 0 && strcmp(controllers_data[i].Name, rcv_packet_name) == 0) {
-            if (strcmp("00000000", rcv_packet.random) == 0 && strcmp("", rcv_packet_situation) != 0) return i;
-        } i++;
+        if (strcmp(controllers_data[i].MAC, rcv_packet.mac) == 0) pos = i;
+        i++;
+    }
+
+    if (pos >= 0) {
+        if (rcv_packet.type == 0x00 && strcmp(controllers_data[pos].Name, rcv_packet_name) == 0 &&
+        strcmp("00000000", rcv_packet.random) == 0 && strcmp("", rcv_packet_situation) != 0) return pos;
     }
     return -1;
 }
 
 char* random_number(int seed) {
     int i = 0; char random_aux[9];
-    char *random = malloc(sizeof(random_aux));
-
+    char *random = (char*) malloc(sizeof(random_aux));
     while (i < 8) {
-        random[i] = '0' + (seed + rand() % 10);
+        random[i] = '0' + (seed + rand() % 8);
         i++;
     }
     random[i] = '\0';
@@ -143,10 +149,17 @@ void read_entry_parameters(int argc, char *argv[]) {
     }
 }
 
-void list_controllers();
+void list_controllers(void) {
+    int i = 0;
+    printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
+    while (controllers_data->n_elems > i) {
+        printf("%s              - %s          %s\n", controllers_data[i].Name, controllers_data[i].MAC, controllers_data[i].State);
+        i++;
+    }
+}
 
 /* Read file 'controllers.dat' and save the information (Name, MAC, State, IP, Random, Situation, Elements) inside controllers_data.*/
-void read_controllers() {
+void read_controllers(void) {
     FILE *file = fopen(controllers_file, "r");
     char line[25];
     int nline = 0;
@@ -169,17 +182,8 @@ void read_controllers() {
     }
 }
 
-void list_controllers() {
-    int i = 0;
-    printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
-    while (controllers_data->n_elems > i) {
-        printf("%s              - %s          %s\n", controllers_data[i].Name, controllers_data[i].MAC, controllers_data[i].State);
-        i++;
-    }
-}
-
 /* Read file 'server.cfg' and save the information (Name, MAC, UDP-port, TCP-port) inside config_data.*/
-void read_config() {
+void read_config(void) {
     FILE *file = fopen(config_file, "r");
     char line[25];
 
@@ -196,7 +200,23 @@ void read_config() {
     if (debug) { print_msg_time("DEBUG => Llegits paràmetres arxiu de configuració\n"); }
 }
 
-void udp_socket() {
+void *system_info(void *args) {
+    char input[100];
+
+    while (true) {
+        scanf("%s", input);
+        if (strcmp(input, "list") == 0) list_controllers();
+        else if (strcmp(input, "set") == 0) printf("Sending information to an entry element of the controller...\n");
+        else if (strcmp(input, "get") == 0) printf("Requesting information of the element of the controller...\n");
+        else if (strcmp(input, "quit") == 0) kill(pid, SIGKILL);
+        else {
+            printf("Unknown command. Please enter one of the following commands:\n");
+            printf("- list\n- set <controller_name> <device_name> <value>\n- get <controller_name> <device_name>\n- quit");
+        }
+    }
+}
+
+void udp_socket(void) {
     struct sockaddr_in addr;
     sock_udp = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -207,7 +227,7 @@ void udp_socket() {
     bind(sock_udp, (struct sockaddr *) &addr, sizeof(struct sockaddr_in));
 }
 
-void tcp_socket() {
+void tcp_socket(void) {
     struct sockaddr_in addr;
     sock_tcp = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -221,7 +241,7 @@ void tcp_socket() {
 
 void *classify_packet();
 
-void read_packet() {
+void read_packet(void) {
     char *client_host = malloc(INET_ADDRSTRLEN);
     int client_port;
     Packet rcv_packet;
@@ -247,256 +267,107 @@ void read_packet() {
     }
 }
 
-void send_packet();
-void subs_request();
-/*void hello_pack();*/
-void subs_info();
+void subs_request(Args arg, int pos);
 
-void *classify_packet(Args *arg) {
-    Args *args = arg;
+void *classify_packet(Args *args) {
     struct sockaddr_in client_addr = args->client_addr;
     Packet rcv_packet = args->packet;
     char *host = args->host;
-    int port = *(int*) args->client_port;
+    int port = *(int *) args->client_port;
     int pos = verify_client_id(rcv_packet);
 
-    if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_REQ") == 0 &&
-        pos >= 0 && strcmp(controllers_data[pos].State, "DISCONNECTED") == 0) {
-        subs_request(arg, pos);
-    } else if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_INFO") == 0 &&
-        pos >= 0 && strcmp(controllers_data[pos].State, "WAIT_INFO") == 0) {
-        subs_info(arg, pos, client_addr);
-    } else if (strcmp(packet_dictionary(rcv_packet.type), "HELLO") == 0) {
-        /*hello_pack(arg, pos);*/
-    } else {
-        send_packet(rcv_packet, host, port, "SUBS_REJ", pos);
+    if (pos >= 0 && strcmp(packet_dictionary(rcv_packet.type), "SUBS_REQ") == 0) {
+        printf("PAQUET CLASSIFICAT.\n");
+        subs_request(*args, pos);
     }
     return NULL;
 }
 
-void send_packet(Packet rcv_packet, char* host, int port, char* packet_type, int pos) {
-    Packet packet;
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    inet_pton(AF_INET, host, &addr.sin_addr);
+struct sockaddr_in open_udp_port(void) {
+    struct sockaddr_in new_addr_srv;
+    socklen_t new_addr_len = sizeof(new_addr_srv);
+    int new_udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
 
-    packet.type = 0x02; strcpy(packet.mac, rcv_packet.mac); strcpy(packet.random, "00000000");
-    strcpy(packet.data, "Dades incorrectes");
+    memset(&new_addr_srv, 0, sizeof(struct sockaddr_in));
+    new_addr_srv.sin_family = AF_INET;
+    new_addr_srv.sin_addr.s_addr = htonl(INADDR_ANY);
+    new_addr_srv.sin_port = htons(0);
 
-    sendto(sock_udp, &packet, sizeof(Packet), 0, (struct sockaddr *) &addr, sizeof(addr));
-    if (strcmp(packet_type, "SUBS_REJ") == 0) { strcpy(controllers_data[pos].State, "DISCONNECTED"); }
-}
-
-void send_new_packet(Packet packet, int port, int pos);
-
-
-int check_client_id(Packet rcv_packet) {
-    int i = 0;
-    char** controllers_info = get_controllers_info(rcv_packet.data);
-    char* rcv_packet_name = controllers_info[0];
-
-    while (i < controllers_data->n_elems) {
-        if (strcmp(controllers_data[i].MAC, rcv_packet.mac) == 0 && strcmp(controllers_data[i].Name, rcv_packet_name) == 0) {
-            if (strcmp(controllers_data[i].Random, rcv_packet.random) == 0) return i;
-        } i++;
-    }
-    return -1;
+    bind(new_udp_socket, (struct sockaddr *) &new_addr_srv, sizeof(struct sockaddr_in));
+    getsockname(new_udp_socket, (struct sockaddr *) &new_addr_srv, &new_addr_len);
+    printf("port obert\n");
+    return new_addr_srv;
 }
 
 void subs_request(Args arg, int pos) {
+    /* ----- VARIABLES ----- */
     Packet packet_to_send;
-    Packet *rcv_packet = &arg.packet;
+    Packet rcv_packet = arg.packet;
     int client_port = *((int *) arg.client_port);
     char *client_host = arg.host;
-    char* random = random_number(2);
+    char *random = random_number(2);
     char data_to_send[80];
+    int port;
 
     struct sockaddr_in client_addr;
-    struct sockaddr_in new_addr_serv;
-    socklen_t new_addr_len = sizeof(new_addr_serv);
+    struct sockaddr_in new_addr_srv;
+    socklen_t new_addr_len = sizeof(new_addr_srv);
+    int new_udp_socket;
+
+    char *buffer = malloc(buffer_size);
+    fd_set fds;
+    struct timeval tv;
+    int timeout;
+    /* --------------------- */
 
     /* Where will the packet be sent */
     memset(&client_addr, 0, sizeof(client_addr));
     client_addr.sin_family = AF_INET;
     client_addr.sin_port = htons(client_port);
-    inet_pton(AF_INET, client_host, &client_addr.sin_addr);
+    inet_pton(AF_INET, client_host, &client_addr.sin_port);
 
-    /* Open UDP port */
-    int port;
-    int new_udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    memset(&new_addr_serv, 0, sizeof(struct sockaddr_in));
-    new_addr_serv.sin_family = AF_INET;
-    new_addr_serv.sin_addr.s_addr = htonl(INADDR_ANY);
-    new_addr_serv.sin_port = htons(0);
-    bind(new_udp_socket, (struct sockaddr *) &new_addr_serv, sizeof(struct sockaddr_in));
-    getsockname(new_udp_socket, (struct sockaddr *) &new_addr_serv, &new_addr_len);
-    /**/
+    /* Open new UDP port */
+    new_udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
+
+    memset(&new_addr_srv, 0, sizeof(struct sockaddr_in));
+    new_addr_srv.sin_family = AF_INET;
+    new_addr_srv.sin_addr.s_addr = htonl(INADDR_ANY);
+    new_addr_srv.sin_port = htons(0);
+
+    bind(new_udp_socket, (struct sockaddr *) &new_addr_srv, sizeof(struct sockaddr_in));
+    getsockname(new_udp_socket, (struct sockaddr *) &new_addr_srv, &new_addr_len);
+    printf("port obert\n");
 
     /* Wait for SUBS_INFO packet */
-    char *buffer = malloc(buffer_size);
-    fd_set fds;
-    struct timeval tv;
-    int timeout;
     tv.tv_sec = s * init;
     tv.tv_usec = 0;
     FD_ZERO(&fds);
     FD_SET(new_udp_socket, &fds);
 
     /* Build packet to send */
-    port = htons(new_addr_serv.sin_port); sprintf(data_to_send, "%s", (char *) port);
-    packet_to_send.type = 0x01; strcpy(packet_to_send.mac, config_data.MAC); strcpy(packet_to_send.random, random);
+    port = htons(new_addr_srv.sin_port);
+    sprintf(data_to_send, "%d", port);
+    packet_to_send.type = 0x01;
+    strcpy(packet_to_send.mac, config_data.MAC);
+    strcpy(packet_to_send.random, random);
     strcpy(packet_to_send.data, data_to_send);
 
     /* Send the packet */
-    sendto(sock_udp, &packet_to_send, sizeof(Packet), 0, (struct sockaddr *) &client_addr,
-        sizeof(client_addr));
+    sendto(sock_udp, &packet_to_send, sizeof(Packet), 0, (struct sockaddr *) &client_addr, sizeof(client_addr));
     if (debug) {
         print_msg_time("DEBUG => Enviat: "); printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
-        buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
+        buffer_size, packet_dictionary(packet_to_send.type), packet_to_send.mac, packet_to_send.random, packet_to_send.data);
     }
     strcpy(controllers_data[pos].State, "WAIT_INFO");
     print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[pos].State);
 
-
-    /* Wait for SUBS_INFO packet */
-
-    timeout = select(new_udp_socket+1, &fds, NULL, NULL, &tv);
-    if (timeout > 0) {
-        recvfrom(new_udp_socket, buffer, sizeof(Packet), 0, (struct sockaddr *) &client_addr, &new_addr_len);
-        rcv_packet = (Packet *) buffer;
-        if (debug) {
-            print_msg_time("DEBUG => Rebut: "); printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
-            buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
-        }
-
-        if (rcv_packet->type == 0x03) { /* 0x03 = SUBS_INFO */
-            pos = check_client_id(*rcv_packet);
-            if (pos >= 0) {
-                char** controllers_info = get_controllers_info(rcv_packet->data);
-                *controllers_data[pos].IP = *controllers_info[0];
-                *controllers_data[pos].Elements = *controllers_info[1];
-                /*¿
-                token = strtok(rcv_packet->data, ",");
-                if (token != NULL) {
-                    controllers[get_controller_id(name)].tcp_port = atoi(token);
-                    token = strtok(NULL, ",");
-                    if (token != NULL) {
-                        strcpy(controllers[get_controller_id(name)].devices, token);
-                        controllers[get_controller_id(name)].devices[200 - 1] = '\0';
-                    }
-                }
-                ?*/
-                sprintf(data_to_send, "%d", config_data.TCP_port);
-                packet_to_send.type = 0x04; strcpy(packet_to_send.mac, config_data.MAC);
-                strcpy(packet_to_send.random, random); strcpy(packet_to_send.data, data_to_send);
-                strcpy(controllers_data[pos].State, "CONNECTED");
-                print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[pos].State);
-
-            } else {
-                packet_to_send.type = 0x02; strcpy(packet_to_send.mac, config_data.MAC);
-                strcpy(packet_to_send.random, random); strcpy(packet_to_send.data, data_to_send);
-                strcpy(controllers_data[pos].State, "DISCONNECTED");
-                strcpy(controllers_data[pos].Random, "00000000");
-                print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[pos].State);
-            }
-        }
-        else {
-            packet_to_send.type = 0x02; strcpy(packet_to_send.mac, config_data.MAC);
-            strcpy(packet_to_send.random, "00000000"); strcpy(packet_to_send.data, "El paquet no és correcte");
-        }
-
-        sendto(sock_udp, &packet_to_send, sizeof(Packet), 0, (struct sockaddr *) &client_addr, sizeof(client_addr));
-        if (debug) {
-            print_msg_time("DEBUG => Enviat: "); printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
-            buffer_size, packet_dictionary(rcv_packet->type), rcv_packet->mac, rcv_packet->random, rcv_packet->data);
-        }
-
-    } else {
-        strcpy(controllers_data[pos].State, "DISCONNECTED");
-        strcpy(controllers_data[pos].Random, "00000000");
-        print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[pos].State);
-        exit(0);
-    }
-    /*communication(pos);*/
-}
-/*
-void hello_pack(Args arg, int pos) {
-    strcpy(data_to_send, rcv_packet->data);
-    token = strtok(rcv_packet->data, ",");
-    if (token != NULL) {
-        strcpy(name, token);
-        name[strlen(name)] = '\0';
-        token = strtok(NULL, ",");
-        if (token != NULL) {
-            strcpy(situation, token);
-            situation[strlen(situation) - 1] = '\0';
-        }
-    }
-
-    if (!is_authorized(name, rcv_packet->mac)) {
-        packet_to_send = build_packet_udp(0x11, server.mac, get_controller_random_number(name),
-                                          "The controller is not authorized");
-
-    } else if (!is_valid_data(name, rcv_packet->random_number)) {
-        packet_to_send = build_packet_udp(0x11, server.mac, get_controller_random_number(name),
-                                          "Data is not valid");
-
-    } else {
-        set_controller_state(name, "SEND_HELLO\0");
-        controllers[get_controller_id(name)].hello_received = true;
-        packet_to_send = build_packet_udp(0x10, server.mac, get_controller_random_number(name),
-                                          data_to_send);
-    }
-
-    if (sendto(socket_udp, &packet_to_send, sizeof(Packet_Udp), 0,
-               (struct sockaddr *) &client_addr, sizeof(client_addr)) < 0) {
-        time(&now);
-        local_time = localtime(&now);
-        printf("%02d:%02d:%02d: ERROR => Server: Couldn't send the packet via UDP\n",
-               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
-        exit(1);
-    }
-    if (debug) {
-        time(&now);
-        local_time = localtime(&now);
-        printf("%02d:%02d:%02d: DEBUG => Sent: bytes=103, command=%s, mac=%s, rndm=%s, info=%s\n",
-               local_time->tm_hour, local_time->tm_min, local_time->tm_sec,
-               get_string_from_type(packet_to_send.type), server.mac,
-               packet_to_send.random_number, packet_to_send.data);
-    }
-}
-*/
-void subs_info(void *arg, int pos, struct sockaddr_in client_addr) {
-    Packet *rcv_packet = (Packet *) ((char **) arg)[0];
-
-    sendto(sock_udp, &rcv_packet, sizeof(Packet), 0, (struct sockaddr *) &client_addr, sizeof(client_addr));
-    strcpy(controllers_data[pos].State, "SUBSCRIBED");
-    printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
-    printf("%s              - %s          %s\n", controllers_data[pos].Name, controllers_data[pos].MAC, controllers_data[pos].State);
-}
-
-void *system_info(void *args) {
-    char input[100];
-
-    while (true) {
-        scanf("%s", input);
-        if (strcmp(input, "list") == 0) list_controllers();
-        else if (strcmp(input, "set") == 0) printf("Sending information to an entry element of the controller...\n");
-        else if (strcmp(input, "get") == 0) printf("Requesting information of the element of the controller...\n");
-        else if (strcmp(input, "quit") == 0) kill(pid, SIGKILL);
-        else {
-            printf("Unknown command. Please enter one of the following commands:\n");
-            printf("- list\n- set <controller_name> <device_name> <value>\n- get <controller_name> <device_name>\n- quit");
-        }
-        return NULL;
-    }
 }
 
 int main(int argc, char *argv[]) {
     read_entry_parameters(argc, argv);
     read_controllers();
     read_config();
+    pthread_create(&console, NULL, system_info, NULL);
     udp_socket(); if (debug) { print_msg_time("DEBUG => Socket UDP actiu\n"); }
     tcp_socket(); if (debug) { print_msg_time("DEBUG => Socket TCP actiu\n"); }
     read_packet();
