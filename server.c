@@ -56,7 +56,8 @@ typedef struct {
     char IP[30];
     char Random[30];
     char Situation[30];
-    char Elements[30];
+    char Elements[60];
+    int TCP_port;
     int n_elems;
 } ControllersData;
 ControllersData controllers_data[10];
@@ -109,7 +110,6 @@ char** get_controllers_info(char *data) {
     return controllers_info;
 }
 
-/* NEED TO FIX VERIFY_CLIENT_ID!!! */
 int verify_client_id(Packet rcv_packet) {
     int i = 0; int pos = -1;
     char** controllers_info = get_controllers_info(rcv_packet.data);
@@ -117,15 +117,16 @@ int verify_client_id(Packet rcv_packet) {
     char* rcv_packet_situation = controllers_info[1];
 
     while (i < controllers_data->n_elems && pos < 0) {
-        if (strcmp(controllers_data[i].MAC, rcv_packet.mac) == 0 && strcmp(controllers_data[i].Name, rcv_packet_name) == 0) pos = i;
+        if (strcmp(controllers_data[i].MAC, rcv_packet.mac) == 0) pos = i;
         i++;
     }
 
-    printf("Pos: %i\n", pos);
-    printf("Type: %s  -  Random: %s - %s\n", packet_dictionary(rcv_packet.type), controllers_data[0].Random, rcv_packet.random);
-
     if (pos >= 0) {
-        if (rcv_packet.type == 0x00 && strcmp("00000000", rcv_packet.random) == 0 && strcmp("", rcv_packet_situation) != 0) return pos;
+        if (rcv_packet.type == 0x00 && strcmp(controllers_data[pos].Name, rcv_packet_name) == 0 &&
+            strcmp("00000000", rcv_packet.random) == 0 && strcmp("", rcv_packet_situation) != 0) {
+            strcpy(controllers_data[pos].Situation, rcv_packet_situation);
+            return pos;
+        }
         else if (rcv_packet.type == 0x03 && strcmp(controllers_data[pos].Random, rcv_packet.random) == 0) return pos;
     }
     return -1;
@@ -160,9 +161,10 @@ void read_entry_parameters(int argc, char *argv[]) {
 
 void list_controllers(void) {
     int i = 0;
-    printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
+    printf("--NOM---  ------IP------  -----MAC----  --RNDM--  ----ESTAT---  --SITUACIÓ--  --ELEMENTS------------------------------------------\n");
     while (controllers_data->n_elems > i) {
-        printf("%s              - %s          %s\n", controllers_data[i].Name, controllers_data[i].MAC, controllers_data[i].State);
+        printf("%-8s  %-14s  %-12s  %-8s  %-12s  %-12s  %-52s\n", controllers_data[i].Name, controllers_data[i].IP, controllers_data[i].MAC,
+               controllers_data[i].Random, controllers_data[i].State, controllers_data[i].Situation, controllers_data[i].Elements);
         i++;
     }
 }
@@ -331,6 +333,9 @@ void subs_request(Args arg, int pos) {
     strcpy(packet_to_send.random, random);
     strcpy(packet_to_send.data, data_to_send);
 
+    /* Update random in controllers_list */
+    strcpy(controllers_data[pos].Random, random);
+
     /* Send the packet */
     sendto(sock_udp, &packet_to_send, sizeof(Packet), 0, (struct sockaddr *) &client_addr, sizeof(client_addr));
     if (debug) {
@@ -353,13 +358,15 @@ void subs_request(Args arg, int pos) {
         rcv_packet = *(Packet *) buffer;
         if (debug) {
             print_msg_time("DEBUG => Rebut: "); printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
-                                                       buffer_size, packet_dictionary(rcv_packet.type), rcv_packet.mac, rcv_packet.random, rcv_packet.data);
+            buffer_size, packet_dictionary(rcv_packet.type), rcv_packet.mac, rcv_packet.random, rcv_packet.data);
         }
 
         if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_INFO") == 0) {
-            pos = verify_client_id(rcv_packet); /* <-- ERRROR a VERIFY_CLIENT_ID */
+            pos = verify_client_id(rcv_packet);
             if (pos >= 0) {
-                printf("Client verificat\n");
+                char** controllersInfo = get_controllers_info(rcv_packet.data);
+                controllers_data[pos].TCP_port = atoi(controllersInfo[0]);
+                strcpy(controllers_data[pos].Elements, controllersInfo[1]);
             }
         }
     }
