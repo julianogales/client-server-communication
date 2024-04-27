@@ -54,6 +54,7 @@ typedef struct {
     char Elements[60];
     int TCP_port;
     int n_elems;
+    bool hello;
 } ControllersData;
 ControllersData controllers_data[10];
 
@@ -85,6 +86,9 @@ char *controllers_file = "controllers.dat";
 
 /* TIMERS */
 int s = 2;
+int v = 2;
+int r = 2;
+int x = 3;
 int init = 2;
 
 /* THREADS */
@@ -97,9 +101,10 @@ pthread_t console;
 void print_msg_time(char *msg);
 void list_controllers(void);
 char** get_controllers_info(char *data);
-int verify_client_id(Packet rcv_packet);
+int verify_client_id(Packet rcv_packet, struct sockaddr_in client_addr);
 void *classify_packet(Args *args);
 char* random_number(int seed);
+void send_hello_rej(Packet rcv_packet, int pos, struct sockaddr_in client_addr);
 
 /* Main */
 void read_entry_parameters(int argc, char *argv[]);
@@ -109,6 +114,7 @@ void *system_info(void *args);
 void udp_socket(void);
 void tcp_socket(void);
 void subs_request(Args arg, int pos);
+void count_hello(int pos);
 void communication(Args arg, int pos);
 /* ------------------------------------------------------------------------------------------------------------------ */
 
@@ -125,7 +131,7 @@ char** get_controllers_info(char *data) {
     return controllers_info;
 }
 
-int verify_client_id(Packet rcv_packet) {
+int verify_client_id(Packet rcv_packet, struct sockaddr_in client_addr) {
     int i = 0; int pos = -1;
     char** controllers_info = get_controllers_info(rcv_packet.data);
     char* rcv_packet_name = controllers_info[0];
@@ -137,12 +143,22 @@ int verify_client_id(Packet rcv_packet) {
     }
 
     if (pos >= 0) {
+        /* rcv_packet = SUBS_REQ */
         if (rcv_packet.type == 0x00 && strcmp(controllers_data[pos].Name, rcv_packet_name) == 0 &&
             strcmp("00000000", rcv_packet.random) == 0 && strcmp("", rcv_packet_situation) != 0) {
             strcpy(controllers_data[pos].Situation, rcv_packet_situation);
             return pos;
         }
+        /* rcv_packet = SUBS_INFO */
         else if (rcv_packet.type == 0x03 && strcmp(controllers_data[pos].Random, rcv_packet.random) == 0) return pos;
+
+        /* rcv_packet = first HELLO || following HELLO */
+        else if (rcv_packet.type == 0x10 && (strcmp(controllers_data[pos].State, "SUBSCRIBED") == 0 ||
+        strcmp(controllers_data[pos].State, "SEND_HELLO") == 0)) {
+            if (strcmp(controllers_data[pos].Random, rcv_packet.random) == 0 && strcmp(controllers_data[pos].Name, rcv_packet_name) == 0
+            && strcmp(controllers_data[pos].Situation, rcv_packet_situation) == 0) return pos;
+            else send_hello_rej(rcv_packet, pos, client_addr);
+        }
     }
     return -1;
 }
@@ -203,7 +219,7 @@ void read_controllers(void) {
     fclose(file);
 
     if (debug) {
-        print_msg_time("DEBUG => Llegits "); printf("%i autoritats en el sistema\n", controllers_data->n_elems);
+        print_msg_time("DEBUG => Llegits "); printf("%i equips autoritzats en el sistema\n", controllers_data->n_elems);
         list_controllers();
     }
 }
@@ -234,10 +250,13 @@ void *system_info(void *args) {
         if (strcmp(input, "list") == 0) list_controllers();
         else if (strcmp(input, "set") == 0) printf("Sending information to an entry element of the controller...\n");
         else if (strcmp(input, "get") == 0) printf("Requesting information of the element of the controller...\n");
-        else if (strcmp(input, "quit") == 0) kill(pid, SIGKILL);
+        else if (strcmp(input, "quit") == 0) {
+            print_msg_time("DEBUG => Petició de finalització\n");
+            kill(pid, SIGKILL);
+        }
         else {
             printf("Unknown command. Please enter one of the following commands:\n");
-            printf("- list\n- set <controller_name> <device_name> <value>\n- get <controller_name> <device_name>\n- quit");
+            printf("- list\n- set <controller_name> <device_name> <value>\n- get <controller_name> <device_name>\n- quit\n");
         }
     }
 }
@@ -293,10 +312,13 @@ void read_packet(void) {
 
 void *classify_packet(Args *args) {
     Packet rcv_packet = args->packet;
-    int pos = verify_client_id(rcv_packet);
+    struct sockaddr_in client_addr = args->client_addr;
+    int pos = verify_client_id(rcv_packet, client_addr);
 
     if (pos >= 0 && strcmp(packet_dictionary(rcv_packet.type), "SUBS_REQ") == 0) {
         subs_request(*args, pos);
+    } else if ( pos >= 0 && strcmp(packet_dictionary(rcv_packet.type), "HELLO") == 0) {
+        communication(*args, pos);
     }
     return NULL;
 }
@@ -351,7 +373,7 @@ void subs_request(Args arg, int pos) {
         buffer_size, packet_dictionary(packet_to_send.type), packet_to_send.mac, packet_to_send.random, packet_to_send.data);
     }
     strcpy(controllers_data[pos].State, "WAIT_INFO");
-    print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[pos].State);
+    print_msg_time("MSG.  => Controlador: "); printf("%s, passa a l'estat: %s\n", controllers_data[pos].Name, controllers_data[pos].State);
 
 
     /* Wait for SUBS_INFO packet */
@@ -370,7 +392,7 @@ void subs_request(Args arg, int pos) {
             buffer_size, packet_dictionary(rcv_packet.type), rcv_packet.mac, rcv_packet.random, rcv_packet.data);
         }
 
-        new_pos = verify_client_id(rcv_packet);
+        new_pos = verify_client_id(rcv_packet, client_addr);
         if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_INFO") == 0 && new_pos >= 0) {
             char** controllersInfo = get_controllers_info(rcv_packet.data);
             controllers_data[new_pos].TCP_port = atoi(controllersInfo[0]);
@@ -381,16 +403,17 @@ void subs_request(Args arg, int pos) {
             sprintf(data_to_send, "%d", config_data.TCP_port);
             packet_to_send.type = 0x04; /* 0x04 = INFO_ACK */
             strcpy(packet_to_send.mac, config_data.MAC); strcpy(packet_to_send.random, random);
-            strcpy(packet_to_send.data, data_to_send); strcpy(controllers_data[new_pos].State, "SUBSCRIBED");
-            print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[new_pos].State);
+            strcpy(packet_to_send.data, data_to_send);
+            strcpy(controllers_data[new_pos].State, "SUBSCRIBED");
         }
         else {
             packet_to_send.type = 0x02; /* 0x02 = SUBS_REJ */
             strcpy(packet_to_send.mac, config_data.MAC); strcpy(packet_to_send.random, random);
             if (rcv_packet.type == 0x03) strcpy(packet_to_send.data, "Dades incorrectes");
             else strcpy(packet_to_send.data, "Paquet incorrecte");
-            strcpy(controllers_data[pos].State, "DISCONNECTED"); strcpy(controllers_data[pos].Random, "00000000");
-            print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[pos].State);
+            strcpy(controllers_data[pos].State, "DISCONNECTED");
+            strcpy(controllers_data[pos].IP, ""); strcpy(controllers_data[pos].Random, "");
+            strcpy(controllers_data[pos].Situation, ""); strcpy(controllers_data[pos].Elements, "");
         }
         sendto(sock_udp, &packet_to_send, sizeof(Packet), 0, (struct sockaddr *) &client_addr, sizeof(client_addr));
 
@@ -398,17 +421,111 @@ void subs_request(Args arg, int pos) {
             print_msg_time("DEBUG => Enviat: "); printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
             buffer_size, packet_dictionary(packet_to_send.type), packet_to_send.mac, packet_to_send.random, packet_to_send.data);
         }
+        print_msg_time("MSG.  => Controlador: "); printf("%s, passa a l'estat: %s\n", controllers_data[pos].Name, controllers_data[pos].State);
 
-        if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_INFO") == 0 && new_pos >= 0) communication(arg, new_pos);
+        close(new_udp_socket);
+        if (debug) { print_msg_time("DEBUG => Finalitzat procés que atenia el paquet UDP\n"); }
+
+        if (strcmp(packet_dictionary(rcv_packet.type), "SUBS_INFO") == 0 && new_pos >= 0) count_hello(new_pos);
 
     } else {
-        strcpy(controllers_data[pos].State, "DISCONNECTED"); strcpy(controllers_data[pos].Random, "00000000");
-        print_msg_time("MSG.  => Controlador passa a l'estat "); printf("%s\n", controllers_data[pos].State);
+        strcpy(controllers_data[pos].State, "DISCONNECTED");
+        strcpy(controllers_data[pos].IP, ""); strcpy(controllers_data[pos].Random, "");
+        strcpy(controllers_data[pos].Situation, ""); strcpy(controllers_data[pos].Elements, "");
+        print_msg_time("MSG.  => Controlador: "); printf("%s, passa a l'estat: %s\n", controllers_data[pos].Name, controllers_data[pos].State);
+        close(new_udp_socket);
+        if (debug) { print_msg_time("DEBUG => Finalitzat procés que atenia el paquet UDP\n"); }
     }
 }
 
-void communication(Args arg, int pos) {
+void count_hello(int pos) {
+    int strike = 0;
+    bool first_hello_rcv = false;
+    int first_hello_strike = 0;
+    int timeout = v;
 
+    while (strike < x && first_hello_strike < r) {
+        sleep(timeout);
+        if (controllers_data[pos].hello == true) {
+            strike = 0;
+            controllers_data[pos].hello = false;
+            first_hello_rcv = true;
+        } else {
+            strike++;
+            if (!first_hello_rcv) first_hello_strike++;
+        }
+
+    }
+
+    if (strike == x) {
+        print_msg_time("MSG.  => Controlador "); printf("%s [%s] no ha rebut %i HELLO consecutius\n",
+        controllers_data[pos].Name, controllers_data[pos].MAC, x);
+    } else if (first_hello_strike == r) {
+        print_msg_time("MSG.  => Controlador "); printf("%s [%s] no ha rebut el primer HELLO en %i segons\n",
+        controllers_data[pos].Name, controllers_data[pos].MAC, v*r);
+    }
+    strcpy(controllers_data[pos].State, "DISCONNECTED");
+    strcpy(controllers_data[pos].IP, ""); strcpy(controllers_data[pos].Random, "");
+    strcpy(controllers_data[pos].Situation, ""); strcpy(controllers_data[pos].Elements, "");
+    print_msg_time("MSG.  => Controlador: "); printf("%s, passa a l'estat: %s\n", controllers_data[pos].Name, controllers_data[pos].State);
+}
+
+void communication(Args arg, int pos) {
+    Packet rcv_packet = arg.packet;
+    Packet packet_to_send;
+    struct sockaddr_in client_addr = arg.client_addr;
+    controllers_data[pos].hello = true;
+
+    if (debug) {
+        print_msg_time("DEBUG => Rebut paquet: "); printf("%s del controlador: %s [%s]\n",
+        packet_dictionary(rcv_packet.type), controllers_data[pos].Name, controllers_data[pos].MAC);
+    }
+
+    /* Build packet to send */
+    packet_to_send.type = 0x10; /* 0x10 = HELLO */
+    strcpy(packet_to_send.mac, config_data.MAC);
+    strcpy(packet_to_send.random, controllers_data[pos].Random);
+    strcpy(packet_to_send.data, rcv_packet.data);
+
+    /* Send the packet */
+    sendto(sock_udp, &packet_to_send, sizeof(Packet), 0, (struct sockaddr *) &client_addr,
+           sizeof(client_addr));
+
+    if (debug) {
+        print_msg_time("DEBUG => Enviat: ");
+        printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
+               buffer_size, packet_dictionary(packet_to_send.type), packet_to_send.mac,
+               packet_to_send.random, packet_to_send.data);
+    }
+    if (strcmp(controllers_data[pos].State, "SUBSCRIBED") == 0) {
+        strcpy(controllers_data[pos].State, "SEND_HELLO");
+        print_msg_time("MSG.  => Controlador: "); printf("%s, passa a l'estat: %s\n", controllers_data[pos].Name, controllers_data[pos].State);
+    }
+    if (debug) { print_msg_time("DEBUG => Finalitzat procés que atenia el paquet UDP\n"); }
+}
+
+void send_hello_rej(Packet rcv_packet, int pos, struct sockaddr_in client_addr) {
+    Packet packet_to_send;
+
+    /* Build packet to send */
+    packet_to_send.type = 0x11; /* 0x11 = HELLO_REJ */
+    strcpy(packet_to_send.mac, config_data.MAC); strcpy(packet_to_send.random, "00000000");
+    strcpy(packet_to_send.data, "Dades incorrectes");
+    strcpy(controllers_data[pos].State, "DISCONNECTED");
+    strcpy(controllers_data[pos].IP, ""); strcpy(controllers_data[pos].Random, "");
+    strcpy(controllers_data[pos].Situation, ""); strcpy(controllers_data[pos].Elements, "");
+    print_msg_time("MSG.  => Controlador: "); printf("%s, passa a l'estat: %s\n", controllers_data[pos].Name, controllers_data[pos].State);
+
+    /* Send the packet */
+    sendto(sock_udp, &packet_to_send, sizeof(Packet), 0, (struct sockaddr *) &client_addr,
+    sizeof(client_addr));
+
+    if (debug) {
+        print_msg_time("DEBUG => Enviat: ");
+        printf("bytes=%i, comanda=%s, mac=%s, rndm=%s, dades=%s\n",
+               buffer_size, packet_dictionary(packet_to_send.type), packet_to_send.mac,
+               packet_to_send.random, packet_to_send.data);
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -418,7 +535,10 @@ int main(int argc, char *argv[]) {
     pthread_create(&console, NULL, system_info, NULL);
     udp_socket(); if (debug) { print_msg_time("DEBUG => Socket UDP actiu\n"); }
     tcp_socket(); if (debug) { print_msg_time("DEBUG => Socket TCP actiu\n"); }
+    if (debug) {
+        print_msg_time("DEBUG => Creat fill per gestionar la BBDD de controladors\n");
+        print_msg_time("INFO  => Establert temporitzador per la gestió de la BBDD\n");
+    }
     read_packet();
-
     return 0;
 }
