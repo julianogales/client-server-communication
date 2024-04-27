@@ -1,12 +1,9 @@
-#include <stdbool.h>
+/* Libraries */
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 #include <time.h>
-#include <sys/socket.h>
-#include <sys/types.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
@@ -61,10 +58,9 @@ ControllersData controllers_data[10];
 typedef struct {
     unsigned char type;
     char mac[13];
-    char random[9];
+    char random_number[9];
     char data[80];
-} Packet;
-int buffer_size = 1 + 13 + 9 + 80;
+} Packet_Udp;
 
 typedef struct {
     Packet packet;
@@ -118,11 +114,8 @@ void count_hello(int pos);
 void communication(Args arg, int pos);
 /* ------------------------------------------------------------------------------------------------------------------ */
 
-void print_msg_time(char *msg) {
-    time_t now = time(NULL);
-    struct tm tm = *localtime(&now);
-    printf("%02d:%02d:%02d: %s", tm.tm_hour, tm.tm_min, tm.tm_sec, msg);
-}
+void read_controllers_file();
+
 
 char** get_controllers_info(char *data) {
     char **controllers_info = malloc(2 * sizeof(char*));
@@ -170,8 +163,10 @@ char* random_number(int seed) {
         random[i] = '0' + ((seed + rand()) % 10);
         i++;
     }
-    random[i] = '\0';
-    return random;
+    udp_socket_init();
+    tcp_socket_init();
+    service_loop();
+    return 0;
 }
 
 void read_entry_parameters(int argc, char *argv[]) {
@@ -187,6 +182,13 @@ void read_entry_parameters(int argc, char *argv[]) {
             if (argc >= 3) { controllers_file = argv[2]; }
             else { print_msg_time("ERROR => No es pot obrir l'arxiu dels controladors: \n"); }
         }
+    }
+    fclose(config_file);
+    if (debug_mode) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: DEBUG => Configuration file read\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
     }
 }
 
@@ -206,14 +208,32 @@ void read_controllers(void) {
     char line[25];
     int nline = 0;
 
-    while (fgets(line, sizeof(line), file)) {
-        char *name = strtok(line, ",");
-        char *mac = strtok(NULL, "\n");
+void udp_socket_init() {
+    struct sockaddr_in addr_serv;
 
-        strcpy(controllers_data[nline].Name, name);
-        strcpy(controllers_data[nline].MAC, mac);
-        strcpy(controllers_data[nline].State, "DISCONNECTED");
-        nline++;
+    /* create INET+DGRAM socket -> UDP */
+    socket_udp = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socket_udp < 0) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: ERROR => Server: Couldn't create UDP socket\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
+        exit(1);
+    }
+
+    /* fill the structure with the addresses where we will bind the server */
+    memset(&addr_serv, 0, sizeof(struct sockaddr_in));
+    addr_serv.sin_family = AF_INET;
+    addr_serv.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr_serv.sin_port = htons(server.udp_port);
+
+    /* bind */
+    if (bind(socket_udp, (struct sockaddr *) &addr_serv, sizeof(struct sockaddr_in)) < 0) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: ERROR => Server: Couldn't bind UDP socket\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
+        exit(1);
     }
     controllers_data->n_elems = nline;
     fclose(file);
@@ -229,17 +249,35 @@ void read_config(void) {
     FILE *file = fopen(config_file, "r");
     char line[25];
 
-    while (fgets(line, sizeof(line), file)) {
-        char *key = strtok(line, " =");
-        char *val = strtok(NULL, " =\n");
+    /* Fill the structure with the addresses where we will bind the client (any local address) */
+    memset(&addr_cli, 0, sizeof(struct sockaddr_in));
+    addr_cli.sin_family = AF_INET;
+    addr_cli.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr_cli.sin_port = htons(server.tcp_port);
 
-        if (strcmp(key, "Name") == 0) { strcpy(config_data.Name, val); } else if (
-            strcmp(key, "MAC") == 0) { strcpy(config_data.MAC, val); } else if (strcmp(key, "UDP-port") == 0) {
-                config_data.UDP_port = atoi(val);
-            } else if (strcmp(key, "TCP-port") == 0) { config_data.TCP_port = atoi(val); }
+    /* bind */
+    if (bind(socket_tcp, (struct sockaddr *) &addr_cli, sizeof(struct sockaddr_in)) < 0) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: ERROR => Server: Couldn't bind TCP socket\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
+        exit(1);
     }
-    fclose(file);
-    if (debug) { print_msg_time("DEBUG => Llegits paràmetres arxiu de configuració\n"); }
+    if (debug_mode) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: DEBUG => Socket TCP active\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
+    }
+
+    /* listen */
+    if (listen(socket_tcp, 10) < 0) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: ERROR => Server: Couldn't listen TCP socket\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
+        exit(1);
+    }
 }
 
 void *system_info(void *args) {
@@ -265,24 +303,109 @@ void udp_socket(void) {
     struct sockaddr_in addr;
     sock_udp = socket(AF_INET, SOCK_DGRAM, 0);
 
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(config_data.UDP_port);
+void receive_packet_udp() {
+    /* Packet data */
+    char *buffer = malloc(sizeof(Packet_Udp));
+    char *client_ip_address = malloc(INET_ADDRSTRLEN);
+    int client_udp_port;
+    Packet_Udp *received_packet = (Packet_Udp *) buffer;
 
-    bind(sock_udp, (struct sockaddr *) &addr, sizeof(struct sockaddr_in));
+    /* Thread */
+    pthread_t udp_packet_evaluation_thread;
+    pthread_attr_t attr;
+    char *args[3];
+
+    /* Prepare the structure to store the client address */
+    struct sockaddr_in addr_cli;
+    socklen_t addr_cli_len = sizeof(addr_cli);
+    memset(&addr_cli, 0, sizeof(struct sockaddr_in));
+    memset(buffer, 0, sizeof(Packet_Udp));
+    memset(client_ip_address, 0, INET_ADDRSTRLEN);
+
+    /* Receive UDP packet */
+    if (recvfrom(socket_udp, (char *) buffer, sizeof(Packet_Udp), 0,
+                 (struct sockaddr *) &addr_cli, &addr_cli_len) < 0) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: ERROR => Server: Couldn't receive UDP packet\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
+        exit(1);
+    }
+    received_packet = (Packet_Udp *) buffer;
+    if (debug_mode) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: DEBUG => Received: bytes=103, command=%s, mac=%s, rndm=%s, info=%s\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec,
+               get_string_from_type(received_packet->type), received_packet->mac, received_packet->random_number,
+               received_packet->data);
+    }
+
+    /* Get ip address and port from the client */
+    inet_ntop(AF_INET, &(addr_cli.sin_addr), client_ip_address, INET_ADDRSTRLEN);
+    client_udp_port = ntohs(addr_cli.sin_port);
+
+    /* Prepare parameters for the thread */
+    args[0] = buffer;
+    args[1] = client_ip_address;
+    args[2] = (char *) &client_udp_port;
+
+    /* Detach the thread */
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+    /* Initialize thread to evaluate the packet received */
+    if (pthread_create(&udp_packet_evaluation_thread, &attr, evaluate_packet_udp,
+                       (void *) args) != 0) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: ERROR => Server: Couldn't create process to evaluate the packet received\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
+        exit(1);
+    }
 }
 
 void tcp_socket(void) {
     struct sockaddr_in addr;
     sock_tcp = socket(AF_INET, SOCK_STREAM, 0);
 
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(config_data.TCP_port);
+    struct sockaddr_in client_addr;
+    struct sockaddr_in new_addr_serv;
+    socklen_t new_addr_len = sizeof(new_addr_serv);
 
-    bind(sock_tcp, (struct sockaddr *) &addr, sizeof(struct sockaddr_in));
-    listen(sock_tcp, 5);
-}
+    Packet_Udp *received_packet = (Packet_Udp *) buffer;
+    char *token;
+    char name[20];
+    char situation[20];
+
+    Packet_Udp packet_to_send;
+    char data_to_send[80];
+
+    /* Where will the packet be sent */
+    memset(&client_addr, 0, sizeof(client_addr));
+    client_addr.sin_family = AF_INET;
+    client_addr.sin_port = htons(client_udp_port);
+    if (inet_pton(AF_INET, client_ip_address, &(client_addr.sin_addr)) <= 0) {
+        time(&now);
+        local_time = localtime(&now);
+        printf("%02d:%02d:%02d: ERROR => Server: Invalid address\n",
+               local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
+        exit(1);
+    }
+
+    if (received_packet->type == 0x00) {
+        /* Extract the controller's name and its situation from the data field of the received packet */
+        char new_random_number[9];
+        token = strtok(received_packet->data, ",");
+        if (token != NULL) {
+            strcpy(name, token);
+            name[strlen(name)] = '\0';
+            token = strtok(NULL, ",");
+            if (token != NULL) {
+                strcpy(situation, token);
+                situation[strlen(situation) - 1] = '\0';
+            }
+        }
 
 void read_packet(void) {
     char *client_host = malloc(INET_ADDRSTRLEN);
@@ -320,6 +443,7 @@ void *classify_packet(Args *args) {
     } else if ( pos >= 0 && strcmp(packet_dictionary(rcv_packet.type), "HELLO") == 0) {
         communication(*args, pos);
     }
+
     return NULL;
 }
 
@@ -454,7 +578,6 @@ void count_hello(int pos) {
             strike++;
             if (!first_hello_rcv) first_hello_strike++;
         }
-
     }
 
     if (strike == x) {
@@ -541,4 +664,22 @@ int main(int argc, char *argv[]) {
     }
     read_packet();
     return 0;
+}
+
+char *get_string_from_type(unsigned char type) {
+    if (type == 0x00) return "SUBS_REQ";
+    else if (type == 0x01) return "SUBS_ACK";
+    else if (type == 0x02) return "SUBS_REJ";
+    else if (type == 0x03) return "SUBS_INFO";
+    else if (type == 0x04) return "INFO_ACK";
+    else if (type == 0x05) return "SUBS_NACK";
+    else if (type == 0x10) return "HELLO";
+    else if (type == 0x11) return "HELLO_REJ";
+    else if (type == 0x20) return "SEND_DATA";
+    else if (type == 0x21) return "SET_DATA";
+    else if (type == 0x22) return "GET_DATA";
+    else if (type == 0x23) return "DATA_ACK";
+    else if (type == 0x24) return "DATA_NACK";
+    else if (type == 0x25) return "DATA_REJ";
+    else return "UNKNOWN";
 }
