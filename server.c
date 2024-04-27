@@ -192,9 +192,9 @@ void read_entry_parameters(int argc, char *argv[]) {
 
 void list_controllers(void) {
     int i = 0;
-    printf("--NOM---  ------IP------  -----MAC----  --RNDM--  ----ESTAT---  --SITUACIÓ--  --ELEMENTS------------------------------------------\n");
+    printf("--NOM--- ------IP------ -----MAC---- --RNDM-- ----ESTAT--- --SITUACIÓ-- --ELEMENTS------------------------------------------\n");
     while (controllers_data->n_elems > i) {
-        printf("%-8s  %-14s  %-12s  %-8s  %-12s  %-12s  %-52s\n", controllers_data[i].Name, controllers_data[i].IP, controllers_data[i].MAC,
+        printf("%-8s %-14s %-12s %-8s %-12s %-12s %s\n", controllers_data[i].Name, controllers_data[i].IP, controllers_data[i].MAC,
                controllers_data[i].Random, controllers_data[i].State, controllers_data[i].Situation, controllers_data[i].Elements);
         i++;
     }
