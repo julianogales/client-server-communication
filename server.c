@@ -110,7 +110,7 @@ void send_hello_rej(Packet rcv_packet, int pos, struct sockaddr_in client_addr);
 void read_entry_parameters(int argc, char *argv[]);
 void read_controllers(void);
 void read_config(void);
-void *system_info(void *args);
+void *system_input(void *args);
 void udp_socket(void);
 void tcp_socket(void);
 void subs_request(Args arg, int pos);
@@ -242,7 +242,7 @@ void read_config(void) {
     if (debug) { print_msg_time("DEBUG => Llegits paràmetres arxiu de configuració\n"); }
 }
 
-void *system_info(void *args) {
+void *system_input(void *args) {
     char input[100];
 
     while (true) {
@@ -531,7 +531,7 @@ int main(int argc, char *argv[]) {
     read_entry_parameters(argc, argv);
     read_controllers();
     read_config();
-    pthread_create(&console, NULL, system_info, NULL);
+    pthread_create(&console, NULL, system_input, NULL);
     udp_socket(); if (debug) { print_msg_time("DEBUG => Socket UDP actiu\n"); }
     tcp_socket(); if (debug) { print_msg_time("DEBUG => Socket TCP actiu\n"); }
     if (debug) {
