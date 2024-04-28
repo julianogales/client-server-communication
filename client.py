@@ -308,6 +308,7 @@ def subscription(sent_packet):
     else:
         print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
               f"Superat el nombre de processos de subscripció ( {n_subs_proc - 1} )")
+        os.kill(pid, signal.SIGTERM)
 
 
 def send_hello(packet_type_num):
