@@ -9,6 +9,7 @@ import threading
 import time
 
 # -------------------------------------------------- GLOBAL VARIABLES --------------------------------------------------
+pid = os.getpid()
 
 sock_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -87,6 +88,13 @@ file_name = 'client.cfg'
 
 
 # ----------------------------------------------------------------------------------------------------------------------
+def signal_handler(sig, frame):
+    os.kill(pid, signal.SIGTERM)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+
 def read_entry_parameters():
     global debug, file_name
 
@@ -164,9 +172,10 @@ def read_packet(data_action):
     rcv_packet.random = rcv_packet.random.decode().strip(b'\x00'.decode())
     rcv_packet.data = rcv_packet.data.split(b'\x00')[0].decode()
 
-    print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
-          f"Rebut: bytes={buffer_size}, comanda={packet_dictionary.get(rcv_packet.type)}, mac={rcv_packet.MAC}, "
-          f"rndm={rcv_packet.random}, dades={rcv_packet.data}")
+    if debug:
+        print(f"{time.strftime('%H:%M:%S', time.localtime())}: DEBUG => "
+              f"Rebut: bytes={buffer_size}, comanda={packet_dictionary.get(rcv_packet.type)}, mac={rcv_packet.MAC}, "
+              f"rndm={rcv_packet.random}, dades={rcv_packet.data}")
 
     if data_action == 'store':
         host_server = rcv_host
@@ -367,20 +376,18 @@ def system_input():
                           f"Error de sintàxi. (set <element> <valor>)")
 
             elif parts[0] == 'send':
-                if len(parts) >= 1:
+                if len(parts) >= 2:
                     device_name = parts[1]
-                    print("Sending the value associated to the device <device_name> to the server...")
                 else:
                     print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
                           f"Error de sintàxi. (send <element>)")
 
             elif command == 'quit':
-                print("Terminating client execution. Closing communication ports and terminating all the processes.")
-                os.kill(os.getppid(), signal.SIGINT)
+                os.kill(pid, signal.SIGTERM)
 
             else:
-                print("Unknown command. Please enter one of the following commands:"
-                      "\n- stat\n- set <device_name> <value>\n- send <device_name>\n- quit")
+                print(f"{time.strftime('%H:%M:%S', time.localtime())}: MSG.  => "
+                      f"Comanda incorrecta ({command})")
 
 
 def communication():

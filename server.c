@@ -248,15 +248,14 @@ void *system_info(void *args) {
     while (true) {
         scanf("%s", input);
         if (strcmp(input, "list") == 0) list_controllers();
-        else if (strcmp(input, "set") == 0) printf("Sending information to an entry element of the controller...\n");
-        else if (strcmp(input, "get") == 0) printf("Requesting information of the element of the controller...\n");
+        else if (strcmp(input, "set") == 0) printf("\n");
+        else if (strcmp(input, "get") == 0) printf("\n");
         else if (strcmp(input, "quit") == 0) {
-            print_msg_time("DEBUG => Petició de finalització\n");
+            if(debug) print_msg_time("DEBUG => Petició de finalització\n");
             kill(pid, SIGKILL);
         }
         else {
-            printf("Unknown command. Please enter one of the following commands:\n");
-            printf("- list\n- set <controller_name> <device_name> <value>\n- get <controller_name> <device_name>\n- quit\n");
+            print_msg_time("MSG.  => Comanda incorrecta "); printf("(%s)\n", input);
         }
     }
 }
